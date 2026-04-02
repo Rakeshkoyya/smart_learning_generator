@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { supabaseStorage } from "@/lib/supabase";
 import {
   Document,
   Packer,
@@ -17,10 +20,16 @@ const DEFAULT_FONT = "Calibri";
 const DEFAULT_SIZE = 22; // 11pt
 
 export async function POST(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
-    const { title, results } = (await request.json()) as {
+    const { title, results, generationId } = (await request.json()) as {
       title: string;
       results: PromptResult[];
+      generationId?: string;
     };
 
     if (!results || results.length === 0) {
@@ -91,12 +100,35 @@ export async function POST(request: NextRequest) {
     });
 
     const buffer = await Packer.toBuffer(doc);
+    const uint8 = new Uint8Array(buffer);
+    const safeFilename = sanitizeFilename(docTitle);
 
-    return new NextResponse(new Uint8Array(buffer), {
+    // Save to Supabase Storage + DB if we have a generation ID
+    if (generationId && session.user.id) {
+      const storagePath = `${session.user.id}/${Date.now()}_${safeFilename}.docx`;
+      await supabaseStorage.storage
+        .from("exports")
+        .upload(storagePath, uint8, {
+          contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        });
+
+      await prisma.exportedDocument.create({
+        data: {
+          user_id: session.user.id,
+          generation_id: generationId,
+          format: "docx",
+          storage_path: storagePath,
+          filename: `${safeFilename}.docx`,
+          file_size: uint8.length,
+        },
+      });
+    }
+
+    return new NextResponse(uint8, {
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="${sanitizeFilename(docTitle)}.docx"`,
+        "Content-Disposition": `attachment; filename="${safeFilename}.docx"`,
       },
     });
   } catch (err) {

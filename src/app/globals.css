@@ -127,4 +127,24 @@
   html {
     @apply font-sans;
   }
+
+  /* Theme-aware select / dropdown styling */
+  select {
+    color: var(--foreground);
+    background-color: var(--background);
+    border-color: var(--border);
+  }
+  select:focus {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring), transparent 75%);
+    outline: none;
+  }
+  select option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
+  select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
