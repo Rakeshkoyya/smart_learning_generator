@@ -36,14 +36,14 @@ export function PromptsView() {
   const [editMode, setEditMode] = useState(false);
   const [editName, setEditName] = useState("");
   const [editText, setEditText] = useState("");
-  const [editFormatId, setEditFormatId] = useState<string>("");
+  const [editFormatText, setEditFormatText] = useState("");
   const [newFolderName, setNewFolderName] = useState("");
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [showNewPrompt, setShowNewPrompt] = useState(false);
   const [newPromptFolderId, setNewPromptFolderId] = useState<string>("");
   const [newPromptName, setNewPromptName] = useState("");
   const [newPromptText, setNewPromptText] = useState("");
-  const [newPromptFormatId, setNewPromptFormatId] = useState<string>("");
+  const [newPromptFormatText, setNewPromptFormatText] = useState("");
 
   // Chain state
   const [selectedChain, setSelectedChain] = useState<PromptChain | null>(null);
@@ -143,6 +143,25 @@ export function PromptsView() {
   const createPrompt = async () => {
     if (!newPromptName.trim() || !newPromptText.trim()) return;
     try {
+      // If custom format text is provided, create a new format first
+      let formatId: string | null = null;
+      if (newPromptFormatText.trim()) {
+        const formatRes = await fetch("/api/formats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: `${newPromptName} Format`,
+            description: `Custom format for ${newPromptName}`,
+            template_text: newPromptFormatText,
+          }),
+        });
+        const formatData = await formatRes.json();
+        if (formatRes.ok) {
+          formatId = formatData.format.id;
+          setFormats((prev) => [...prev, formatData.format]);
+        }
+      }
+
       const res = await fetch("/api/prompts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -150,7 +169,7 @@ export function PromptsView() {
           name: newPromptName,
           text: newPromptText,
           folder_id: newPromptFolderId || null,
-          response_format_id: newPromptFormatId || null,
+          response_format_id: formatId,
         }),
       });
       const data = await res.json();
@@ -164,7 +183,7 @@ export function PromptsView() {
         );
         setNewPromptName("");
         setNewPromptText("");
-        setNewPromptFormatId("");
+        setNewPromptFormatText("");
         setShowNewPrompt(false);
         toast.success("Prompt created");
         fetchData();
@@ -177,6 +196,33 @@ export function PromptsView() {
   const updatePrompt = async () => {
     if (!selectedPrompt || !editName.trim() || !editText.trim()) return;
     try {
+      let formatId: string | null = selectedPrompt.response_format_id || null;
+
+      // If format text changed, create or update the format
+      const originalFormatText = selectedPrompt.response_format?.template_text || "";
+      if (editFormatText.trim() !== originalFormatText) {
+        if (editFormatText.trim()) {
+          // Create a new format with the updated text
+          const formatRes = await fetch("/api/formats", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: `${editName} Format`,
+              description: `Custom format for ${editName}`,
+              template_text: editFormatText,
+            }),
+          });
+          const formatData = await formatRes.json();
+          if (formatRes.ok) {
+            formatId = formatData.format.id;
+            setFormats((prev) => [...prev, formatData.format]);
+          }
+        } else {
+          // Clear the format if text is empty
+          formatId = null;
+        }
+      }
+
       const res = await fetch("/api/prompts", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -184,7 +230,7 @@ export function PromptsView() {
           id: selectedPrompt.id,
           name: editName,
           text: editText,
-          response_format_id: editFormatId || null,
+          response_format_id: formatId,
         }),
       });
       const data = await res.json();
@@ -220,14 +266,14 @@ export function PromptsView() {
     setEditMode(false);
     setEditName(prompt.name);
     setEditText(prompt.text);
-    setEditFormatId(prompt.response_format_id || "");
+    setEditFormatText(prompt.response_format?.template_text || "");
   };
 
   const startEdit = () => {
     if (!selectedPrompt) return;
     setEditName(selectedPrompt.name);
     setEditText(selectedPrompt.text);
-    setEditFormatId(selectedPrompt.response_format_id || "");
+    setEditFormatText(selectedPrompt.response_format?.template_text || "");
     setEditMode(true);
   };
 
@@ -550,21 +596,14 @@ export function PromptsView() {
                           (optional)
                         </span>
                       </label>
-                      <select
-                        value={newPromptFormatId}
-                        onChange={(e) => setNewPromptFormatId(e.target.value)}
-                        className="w-full text-sm border rounded-md px-3 py-2 bg-background mt-1"
-                      >
-                        <option value="">None (will use XML tags)</option>
-                        {formats.map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                            {f.description ? ` — ${f.description}` : ""}
-                          </option>
-                        ))}
-                      </select>
+                      <Textarea
+                        placeholder="Write custom response format instructions for the LLM..."
+                        value={newPromptFormatText}
+                        onChange={(e) => setNewPromptFormatText(e.target.value)}
+                        className="min-h-24 text-sm mt-1 font-mono"
+                      />
                       <p className="text-xs text-muted-foreground mt-1">
-                        If no format is selected, the LLM will respond using XML tags
+                        If left empty, the LLM will respond using default XML tags
                       </p>
                     </div>
                     <Button
@@ -615,42 +654,6 @@ export function PromptsView() {
                     </div>
                   </div>
 
-                  {/* Paired format */}
-                  <div className="flex items-center gap-2 text-sm">
-                    {editMode ? (
-                      <div className="flex-1">
-                        <label className="text-sm font-medium">Paired Format</label>
-                        <select
-                          value={editFormatId}
-                          onChange={(e) => setEditFormatId(e.target.value)}
-                          className="w-full text-sm border rounded-md px-3 py-2 bg-background mt-1"
-                        >
-                          <option value="">None (will use XML tags)</option>
-                          {formats.map((f) => (
-                            <option key={f.id} value={f.id}>
-                              {f.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : selectedPrompt.response_format ? (
-                      <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted">
-                        <Link2 className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm">
-                          Paired Format:{" "}
-                          <strong>{selectedPrompt.response_format.name}</strong>
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50">
-                        <Unlink className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-sm text-muted-foreground">
-                          No paired format — will use XML tags
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
                   {/* Prompt text */}
                   {editMode ? (
                     <Textarea
@@ -666,13 +669,45 @@ export function PromptsView() {
                     </div>
                   )}
 
-                  {/* Format preview */}
-                  {selectedPrompt.response_format && !editMode && (
+                  {/* Paired format */}
+                  {editMode ? (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">
+                        Paired Response Format{" "}
+                        <span className="text-muted-foreground font-normal">
+                          (optional)
+                        </span>
+                      </label>
+                      <Textarea
+                        placeholder="Write custom response format instructions for the LLM..."
+                        value={editFormatText}
+                        onChange={(e) => setEditFormatText(e.target.value)}
+                        className="min-h-24 text-sm font-mono"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        If left empty, the LLM will respond using default XML tags
+                      </p>
+                    </div>
+                  ) : selectedPrompt.response_format ? (
                     <div>
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted mb-2">
+                        <Link2 className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-sm">
+                          Paired Format:{" "}
+                          <strong>{selectedPrompt.response_format.name}</strong>
+                        </span>
+                      </div>
                       <h4 className="text-sm font-medium mb-2">Format Template</h4>
                       <pre className="text-xs bg-muted/30 border rounded-lg p-4 whitespace-pre-wrap">
                         {selectedPrompt.response_format.template_text}
                       </pre>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50">
+                      <Unlink className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">
+                        No paired format — will use XML tags
+                      </span>
                     </div>
                   )}
                 </div>

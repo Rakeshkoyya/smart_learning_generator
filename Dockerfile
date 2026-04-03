@@ -25,10 +25,15 @@ RUN npm run build
 
 # Stage 3: Production runner
 FROM node:20-alpine AS runner
+RUN apk add --no-cache openssl
+
+# Force IPv4 preference (fixes connectivity issues on Docker Windows)
+RUN echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
+
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=8080
+ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
 RUN addgroup --system --gid 1001 nodejs
@@ -39,8 +44,14 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Copy prisma schema for runtime generation
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+
 USER nextjs
 
-EXPOSE 8080
+EXPOSE 3000
 
-CMD ["node", "server.js"]
+# Force Node.js to prefer IPv4 (fixes Docker Windows IPv6 issues)
+CMD ["node", "--dns-result-order=ipv4first", "server.js"]

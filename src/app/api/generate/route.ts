@@ -5,13 +5,45 @@ import { supabaseStorage } from "@/lib/supabase";
 
 const BASE_SYSTEM_PROMPT = `You are a helpful assistant. You are given the content of one or more documents. Answer the user's prompt based on the provided content. Be thorough and well-structured in your response.`;
 
-const NO_FORMAT_INSTRUCTIONS = `\n\nIMPORTANT: Wrap your entire response in <response></response> XML tags. Structure your content using:
+const DEFAULT_RESPONSE_FORMAT = `Wrap your entire response in <response></response> XML tags. Structure your content using:
 - <heading>Text</heading> for main headings
 - <subheading>Text</subheading> for sub headings
 - <bold>text</bold> for emphasis
 - "- Item" for bullet lists
 - "1. Item" for numbered lists
 Do NOT use markdown.`;
+
+const RESPONSE_FORMAT_INSTRUCTIONS = `Follow the provided formatting example exactly. Wrap your entire response in <response></response> tags.
+The formatting example below shows how the response should be structured and formatted.
+Pay close attention to the example and mimic the structure, tags, and formatting shown.
+Do NOT deviate from the provided formatting rules.
+Do NOT use markdown or any formatting not specified in the example.
+Output only the expected content wrapped in <response> tags with no extra text.
+
+FORMATTING EXAMPLE:`;
+
+function buildFinalPrompt(
+  sources: string,
+  userQuery: string,
+  responseFormat?: string
+): string {
+  // If custom format provided, use RESPONSE_FORMAT_INSTRUCTIONS + the format example
+  // Otherwise use DEFAULT_RESPONSE_FORMAT
+  const formatSection = responseFormat
+    ? `${RESPONSE_FORMAT_INSTRUCTIONS}\n${responseFormat}`
+    : DEFAULT_RESPONSE_FORMAT;
+  
+  return `${BASE_SYSTEM_PROMPT}
+
+INPUT SOURCES:
+${sources || "(No sources provided)"}
+
+USER QUERY:
+${userQuery}
+
+RESPONSE INSTRUCTIONS:
+${formatSection}`;
+}
 
 function extractResponseContent(content: string): string {
   const match = content.match(/<response>([\s\S]*?)<\/response>/);
@@ -24,11 +56,22 @@ function extractResponseContent(content: string): string {
 async function callLLM(
   apiKey: string,
   model: string,
-  systemPrompt: string,
-  userContent: string | Array<{type: string; text?: string; image_url?: {url: string}}>
+  prompt: string,
+  mediaParts: Array<{type: string; image_url: {url: string}}> = []
 ) {
+  // Build message content - either plain text or multimodal
+  let userContent: string | Array<{type: string; text?: string; image_url?: {url: string}}>;
+  
+  if (mediaParts.length > 0) {
+    userContent = [
+      { type: "text", text: prompt },
+      ...mediaParts,
+    ];
+  } else {
+    userContent = prompt;
+  }
+
   const messages: Array<{role: string; content: string | Array<{type: string; text?: string; image_url?: {url: string}}>}> = [
-    { role: "system", content: systemPrompt },
     { role: "user", content: userContent },
   ];
 
@@ -73,7 +116,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch source content — base64 for PDFs/images, text for others
-    let contextText = "";
+    let sourceTexts: string[] = [];
     const mediaParts: Array<{type: string; image_url: {url: string}}> = [];
 
     if (sourceIds && sourceIds.length > 0) {
@@ -92,7 +135,7 @@ export async function POST(request: NextRequest) {
             console.warn(`[generate] Failed to download ${source.name}:`, dlError?.message);
             // Fallback to extracted text if available
             if (source.extracted_text) {
-              contextText += `\n\n--- Source: ${source.name} ---\n\n${source.extracted_text}`;
+              sourceTexts.push(`[${source.name}]\n${source.extracted_text}`);
             }
             continue;
           }
@@ -107,10 +150,12 @@ export async function POST(request: NextRequest) {
           mediaParts.push({ type: "image_url", image_url: { url: dataUri } });
           console.log(`[generate] Attached ${source.type} as base64: ${source.name} (${(buffer.length / 1024).toFixed(0)} KB)`);
         } else if (source.extracted_text) {
-          contextText += `\n\n--- Source: ${source.name} ---\n\n${source.extracted_text}`;
+          sourceTexts.push(`[${source.name}]\n${source.extracted_text}`);
         }
       }
     }
+
+    const sourcesText = sourceTexts.join("\n\n---\n\n");
 
     // Chain generation: run multiple prompts in sequence
     if (chainId) {
@@ -156,52 +201,33 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        let accumulatedContent = "";
+        const stepResults: string[] = [];
 
         for (const step of chain.steps) {
           const stepFormatText = step.response_format?.template_text;
-
-          let systemPrompt = BASE_SYSTEM_PROMPT;
-          if (stepFormatText) {
-            systemPrompt += `\n\nCRITICAL FORMATTING RULES:\n${stepFormatText}`;
-          } else {
-            systemPrompt += NO_FORMAT_INSTRUCTIONS;
-          }
-
-          // Build user message: include source context + previous outputs
-          let userText = "";
-          if (contextText) {
-            userText += `Document content:\n${contextText}\n\n---\n\n`;
-          }
-          if (accumulatedContent) {
-            userText += `Previous generation output:\n${accumulatedContent}\n\n---\n\n`;
-          }
-          userText += `Prompt: ${step.prompt.text}`;
-
-          let userContent: string | Array<{type: string; text?: string; image_url?: {url: string}}>;
-          if (mediaParts.length > 0) {
-            const parts: Array<{type: string; text?: string; image_url?: {url: string}}> = [
-              { type: "text", text: userText },
-              ...mediaParts,
-            ];
-            userContent = parts;
-          } else {
-            userContent = userText;
-          }
+          
+          // Build final prompt using unified format
+          const finalPrompt = buildFinalPrompt(
+            sourcesText,
+            step.prompt.text,
+            stepFormatText || undefined
+          );
 
           console.log(`[generate-chain] Step ${step.step_order}: ${step.prompt.name}`);
-          const rawContent = await callLLM(apiKey, selectedModel, systemPrompt, userContent);
+          const rawContent = await callLLM(apiKey, selectedModel, finalPrompt, mediaParts);
           const parsed = extractResponseContent(rawContent);
-          accumulatedContent += (accumulatedContent ? "\n\n---\n\n" : "") + parsed;
+          stepResults.push(parsed);
         }
+
+        const combinedContent = stepResults.join("\n\n---\n\n");
 
         await prisma.generation.update({
           where: { id: generation.id },
-          data: { status: "completed", response_content: accumulatedContent },
+          data: { status: "completed", response_content: combinedContent },
         });
 
         return NextResponse.json({
-          content: accumulatedContent,
+          content: combinedContent,
           generationId: generation.id,
         });
       } catch (err) {
@@ -246,36 +272,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Build system prompt with format instructions
-    let systemPrompt = BASE_SYSTEM_PROMPT;
-    if (formatText) {
-      systemPrompt += `\n\nCRITICAL FORMATTING RULES:\n${formatText}`;
-    } else {
-      systemPrompt += NO_FORMAT_INSTRUCTIONS;
-    }
-
-    // Build user message
-    let userContent: string | Array<{type: string; text?: string; image_url?: {url: string}}>;
-
-    if (mediaParts.length > 0) {
-      const parts: Array<{type: string; text?: string; image_url?: {url: string}}> = [];
-      if (contextText) {
-        parts.push({ type: "text", text: `Document content:\n${contextText}\n\n---\n\nPrompt: ${promptText}` });
-      } else {
-        parts.push({ type: "text", text: `Prompt: ${promptText}` });
-      }
-      parts.push(...mediaParts);
-      userContent = parts;
-    } else {
-      userContent = contextText
-        ? `Document content:\n${contextText}\n\n---\n\nPrompt: ${promptText}`
-        : promptText;
-    }
+    // Build final prompt using unified format
+    const finalPrompt = buildFinalPrompt(
+      sourcesText,
+      promptText,
+      formatText || undefined
+    );
 
     console.log(`[generate] Model: ${selectedModel}, Sources: ${sourceIds?.length || 0}, Media: ${mediaParts.length}`);
 
     try {
-      const rawContent = await callLLM(apiKey, selectedModel, systemPrompt, userContent);
+      const rawContent = await callLLM(apiKey, selectedModel, finalPrompt, mediaParts);
       const parsedContent = extractResponseContent(rawContent);
 
       await prisma.generation.update({
