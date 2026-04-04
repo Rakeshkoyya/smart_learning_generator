@@ -44,7 +44,7 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=8080
 ENV HOSTNAME=0.0.0.0
 
 RUN addgroup --system --gid 1001 nodejs
@@ -57,7 +57,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 8080
+# for local we need to chnage this is 3000
+# EXPOSE 3000
 
 # --dns-result-order=ipv4first avoids IPv6 connectivity issues on Docker Desktop (Windows/Mac)
 CMD ["node", "--dns-result-order=ipv4first", "server.js"]
