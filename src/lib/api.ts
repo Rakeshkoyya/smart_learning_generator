@@ -614,3 +614,63 @@ export function generateInfographic(
   // Return abort function
   return () => controller.abort();
 }
+
+// ============= Workflows =============
+
+export interface WorkflowRun {
+  id: string;
+  user_id: string;
+  dataset_id: string;
+  chain_id: string;
+  output_format: string;
+  filename_prefix: string;
+  model: string;
+  status: "pending" | "running" | "completed" | "error" | "cancelled";
+  source_ids: string[];
+  total_files: number;
+  completed_files: number;
+  current_file_index: number;
+  current_step_index: number;
+  total_steps: number;
+  current_file_name: string | null;
+  error_message: string | null;
+  results: Array<{
+    source_id: string;
+    source_name?: string;
+    filename?: string;
+    export_id?: string;
+    status: string;
+    error?: string;
+  }> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function startWorkflow(data: {
+  dataset_id: string;
+  source_ids: string[];
+  chain_id: string;
+  output_format: string;
+  filename_prefix: string;
+  model?: string;
+}): Promise<WorkflowRun> {
+  return apiRequest("/api/workflows", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getWorkflows(limit = 20, offset = 0): Promise<{
+  workflows: WorkflowRun[];
+  total: number;
+}> {
+  return apiRequest(`/api/workflows?limit=${limit}&offset=${offset}`);
+}
+
+export async function getWorkflow(id: string): Promise<WorkflowRun> {
+  return apiRequest(`/api/workflows/${id}`);
+}
+
+export async function cancelWorkflow(id: string): Promise<void> {
+  await apiRequest(`/api/workflows/${id}/cancel`, { method: "POST" });
+}

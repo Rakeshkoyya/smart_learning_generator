@@ -7,6 +7,7 @@ import { PromptsView } from "@/components/workspace/prompts-view";
 import { SourcesView } from "@/components/workspace/sources-view";
 import { ExportsView } from "@/components/workspace/exports-view";
 import { GenieView } from "@/components/workspace/genie/genie-view";
+import { WorkflowView } from "@/components/workspace/workflow-view";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 
 function WorkspaceContent() {
@@ -31,6 +32,7 @@ function WorkspaceContent() {
         {activeSection === "generate" && <GenerateView />}
         {activeSection === "sources" && <SourcesView />}
         {activeSection === "prompts" && <PromptsView />}
+        {activeSection === "workflows" && <WorkflowView />}
         {activeSection === "exports" && <ExportsView />}
         {activeSection === "genie" && <GenieView />}
       </main>

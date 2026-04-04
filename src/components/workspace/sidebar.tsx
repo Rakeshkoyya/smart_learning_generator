@@ -12,10 +12,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Wand2,
+  Workflow,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
-export type SidebarSection = "generate" | "prompts" | "sources" | "exports" | "genie";
+export type SidebarSection = "generate" | "prompts" | "sources" | "exports" | "genie" | "workflows";
 
 interface SidebarProps {
   active: SidebarSection;
@@ -27,6 +28,7 @@ const NAV_ITEMS: { id: SidebarSection; label: string; icon: React.ElementType }[
   { id: "sources", label: "Sources", icon: FolderOpen },
   { id: "prompts", label: "Prompts", icon: FileText },
   { id: "generate", label: "Generate", icon: Sparkles },
+  { id: "workflows", label: "Workflows", icon: Workflow },
   { id: "genie", label: "Genie", icon: Wand2 },
   { id: "exports", label: "Exports", icon: Download },
 ];
