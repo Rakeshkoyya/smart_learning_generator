@@ -1,6 +1,5 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import {
   Database,
   FileText,
@@ -14,6 +13,7 @@ import {
   Cpu,
 } from "lucide-react";
 import type { Dataset, InputSource } from "@/lib/types";
+import { useWorkspace } from "@/lib/workspace-context";
 
 const TYPE_ICONS: Record<string, React.ElementType> = {
   pdf: FileText,
@@ -55,24 +55,7 @@ export function GenieLeftPanel({
   selectedModel,
   onModelChange,
 }: GenieLeftPanelProps) {
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const fetchDatasets = useCallback(async () => {
-    try {
-      const res = await fetch("/api/datasets");
-      const data = await res.json();
-      if (res.ok) setDatasets(data.datasets);
-    } catch {
-      /* ignore */
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchDatasets();
-  }, [fetchDatasets]);
+  const { datasets, isLoadingDatasets: loading } = useWorkspace();
 
   const activeDataset = datasets.find((d) => d.id === selectedDatasetId) || null;
 
@@ -86,7 +69,7 @@ export function GenieLeftPanel({
 
   const selectAll = () => {
     if (!activeDataset) return;
-    onSourceSelectionChange(activeDataset.input_sources.map((s) => s.id));
+    onSourceSelectionChange((activeDataset.input_sources ?? []).map((s) => s.id));
   };
 
   const deselectAll = () => {
@@ -165,7 +148,7 @@ export function GenieLeftPanel({
               Select a dataset to view files
             </p>
           </div>
-        ) : activeDataset.input_sources.length === 0 ? (
+        ) : (activeDataset.input_sources ?? []).length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 px-4">
             <p className="text-xs text-muted-foreground text-center">
               No files in this dataset
@@ -176,17 +159,17 @@ export function GenieLeftPanel({
             {/* Select all / deselect */}
             <div className="px-3 py-1.5 flex items-center justify-between border-b">
               <span className="text-xs text-muted-foreground">
-                {selectedSourceIds.length} / {activeDataset.input_sources.length} selected
+                {selectedSourceIds.length} / {(activeDataset.input_sources ?? []).length} selected
               </span>
               <button
                 className="text-xs text-primary hover:underline"
                 onClick={
-                  selectedSourceIds.length === activeDataset.input_sources.length
+                  selectedSourceIds.length === (activeDataset.input_sources ?? []).length
                     ? deselectAll
                     : selectAll
                 }
               >
-                {selectedSourceIds.length === activeDataset.input_sources.length
+                {selectedSourceIds.length === (activeDataset.input_sources ?? []).length
                   ? "Deselect all"
                   : "Select all"}
               </button>
@@ -194,7 +177,7 @@ export function GenieLeftPanel({
 
             {/* File checkboxes */}
             <div className="py-1">
-              {activeDataset.input_sources.map((source) => {
+              {(activeDataset.input_sources ?? []).map((source) => {
                 const Icon = TYPE_ICONS[source.type] || File;
                 const checked = selectedSourceIds.includes(source.id);
                 return (

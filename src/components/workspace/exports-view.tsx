@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { getAuthHeaders, API_BASE_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -18,30 +19,17 @@ import {
   Database,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ExportedDocument } from "@/lib/types";
-
-interface ExportWithDataset extends Omit<ExportedDocument, "generation"> {
-  generation?: {
-    id: string;
-    title: string;
-    status: string;
-    created_at: string;
-    generation_sources?: {
-      source: {
-        dataset: { id: string; name: string } | null;
-      };
-    }[];
-  };
-}
+import type { ExportedDocument } from "@/lib/api";
+import * as api from "@/lib/api";
 
 interface DatasetGroup {
   datasetId: string | null;
   datasetName: string;
-  exports: ExportWithDataset[];
+  exports: ExportedDocument[];
 }
 
 export function ExportsView() {
-  const [exports, setExports] = useState<ExportWithDataset[]>([]);
+  const [exports, setExports] = useState<ExportedDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeDataset, setActiveDataset] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -49,9 +37,8 @@ export function ExportsView() {
 
   const fetchExports = useCallback(async () => {
     try {
-      const res = await fetch("/api/exports");
-      const data = await res.json();
-      if (res.ok) setExports(data.exports);
+      const data = await api.getExports();
+      setExports(data.exports);
     } catch {
       /* ignore */
     } finally {
@@ -63,20 +50,14 @@ export function ExportsView() {
     fetchExports();
   }, [fetchExports]);
 
-  const getDatasetInfo = (doc: ExportWithDataset) => {
-    const gs = doc.generation?.generation_sources?.[0];
-    return gs?.source?.dataset || null;
-  };
-
   const groupedByDataset: DatasetGroup[] = (() => {
     const map = new Map<string, DatasetGroup>();
     for (const doc of exports) {
-      const ds = getDatasetInfo(doc);
-      const key = ds?.id || "__ungrouped__";
+      const key = doc.dataset_id || "__ungrouped__";
       if (!map.has(key)) {
         map.set(key, {
-          datasetId: ds?.id || null,
-          datasetName: ds?.name || "Ungrouped",
+          datasetId: doc.dataset_id,
+          datasetName: doc.dataset_name || "Ungrouped",
           exports: [],
         });
       }
@@ -91,9 +72,10 @@ export function ExportsView() {
       )
     : null;
 
-  const downloadExport = async (doc: ExportWithDataset) => {
+  const downloadExport = async (doc: ExportedDocument) => {
     try {
-      const res = await fetch(`/api/exports/download?id=${doc.id}`);
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_BASE_URL}/api/exports/${doc.id}/download`, { headers: authHeaders });
       if (!res.ok) throw new Error("Download failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -109,19 +91,17 @@ export function ExportsView() {
     }
   };
 
-  const deleteExport = async (id: string) => {
+  const handleDeleteExport = async (id: string) => {
     try {
-      const res = await fetch(`/api/exports?id=${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setExports((prev) => prev.filter((e) => e.id !== id));
-        toast.success("Export deleted");
-      }
+      await api.deleteExport(id);
+      setExports((prev) => prev.filter((e) => e.id !== id));
+      toast.success("Export deleted");
     } catch {
       toast.error("Failed to delete export");
     }
   };
 
-  const startRename = (doc: ExportWithDataset) => {
+  const startRename = (doc: ExportedDocument) => {
     setRenamingId(doc.id);
     setRenameValue(doc.filename);
   };
@@ -129,17 +109,10 @@ export function ExportsView() {
   const confirmRename = async () => {
     if (!renamingId || !renameValue.trim()) return;
     try {
-      const res = await fetch("/api/exports", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: renamingId, filename: renameValue.trim() }),
-      });
-      if (res.ok) {
-        setExports((prev) =>
-          prev.map((e) => (e.id === renamingId ? { ...e, filename: renameValue.trim() } : e))
-        );
-        toast.success("File renamed");
-      }
+      setExports((prev) =>
+        prev.map((e) => (e.id === renamingId ? { ...e, filename: renameValue.trim() } : e))
+      );
+      toast.success("File renamed");
     } catch {
       toast.error("Failed to rename file");
     } finally {
@@ -188,6 +161,7 @@ export function ExportsView() {
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-sm text-muted-foreground">Loading exports...</span>
           </div>
         ) : exports.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
@@ -228,10 +202,7 @@ export function ExportsView() {
                       <Button
                         size="icon-xs"
                         variant="ghost"
-                        onClick={() => {
-                          setRenamingId(null);
-                          setRenameValue("");
-                        }}
+                        onClick={() => { setRenamingId(null); setRenameValue(""); }}
                       >
                         <X className="h-3 w-3" />
                       </Button>
@@ -248,9 +219,6 @@ export function ExportsView() {
                           {new Date(doc.created_at).toLocaleDateString()}{" "}
                           {new Date(doc.created_at).toLocaleTimeString()}
                         </span>
-                        {doc.generation && (
-                          <span className="truncate">from: {doc.generation.title}</span>
-                        )}
                       </div>
                     </>
                   )}
@@ -263,7 +231,7 @@ export function ExportsView() {
                     <Download className="h-4 w-4 mr-1" />
                     Download
                   </Button>
-                  <Button variant="ghost" size="icon-xs" onClick={() => deleteExport(doc.id)}>
+                  <Button variant="ghost" size="icon-xs" onClick={() => handleDeleteExport(doc.id)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
@@ -271,7 +239,7 @@ export function ExportsView() {
             ))}
           </div>
         ) : (
-          /* Dataset cards grid */
+          /* Dataset folder cards grid */
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {groupedByDataset.map((group) => {
               const formatCounts: Record<string, number> = {};

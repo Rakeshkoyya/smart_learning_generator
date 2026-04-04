@@ -24,7 +24,9 @@ import {
   File,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { InputSource, Dataset } from "@/lib/types";
+import type { InputSource } from "@/lib/types";
+import * as api from "@/lib/api";
+import { useWorkspace } from "@/lib/workspace-context";
 
 const TYPE_ICONS: Record<string, React.ElementType> = {
   pdf: FileText,
@@ -37,8 +39,20 @@ const TYPE_ICONS: Record<string, React.ElementType> = {
 };
 
 export function SourcesView() {
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  // Use workspace context
+  const {
+    datasets,
+    isLoadingDatasets,
+    createDataset,
+    updateDataset,
+    deleteDataset,
+    addSource,
+    removeSource,
+    fetchSourcesForDataset,
+  } = useWorkspace();
+  
   const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null);
+  const [isLoadingSources, setIsLoadingSources] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [previewSource, setPreviewSource] = useState<InputSource | null>(null);
@@ -60,54 +74,44 @@ export function SourcesView() {
 
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const fetchDatasets = useCallback(async () => {
-    try {
-      const res = await fetch("/api/datasets");
-      const data = await res.json();
-      if (res.ok) setDatasets(data.datasets);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
+  // Fetch sources when a dataset is selected
   useEffect(() => {
-    fetchDatasets();
-  }, [fetchDatasets]);
+    if (!activeDatasetId) return;
+    
+    const fetchSources = async () => {
+      setIsLoadingSources(true);
+      try {
+        await fetchSourcesForDataset(activeDatasetId);
+      } catch {
+        /* ignore */
+      } finally {
+        setIsLoadingSources(false);
+      }
+    };
+    
+    fetchSources();
+  }, [activeDatasetId, fetchSourcesForDataset]);
 
   const activeDataset = datasets.find((d) => d.id === activeDatasetId) || null;
 
-  const createDataset = async () => {
+  const handleCreateDataset = async () => {
     if (!newDatasetName.trim()) return;
     try {
-      const res = await fetch("/api/datasets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newDatasetName, description: newDatasetDesc }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setDatasets((prev) => [data.dataset, ...prev]);
+      const dataset = await createDataset(newDatasetName, newDatasetDesc || undefined);
       setNewDatasetName("");
       setNewDatasetDesc("");
       setShowNewDataset(false);
-      setActiveDatasetId(data.dataset.id);
-      toast.success(`Dataset "${data.dataset.name}" created`);
+      setActiveDatasetId(dataset.id);
+      toast.success(`Dataset "${dataset.name}" created`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create dataset");
     }
   };
 
-  const updateDataset = async (id: string) => {
+  const handleUpdateDataset = async (id: string) => {
     if (!editDatasetName.trim()) return;
     try {
-      const res = await fetch("/api/datasets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, name: editDatasetName, description: editDatasetDesc }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setDatasets((prev) => prev.map((d) => (d.id === id ? data.dataset : d)));
+      await updateDataset(id, editDatasetName, editDatasetDesc || undefined);
       setEditingDatasetId(null);
       toast.success("Dataset updated");
     } catch (err) {
@@ -115,14 +119,11 @@ export function SourcesView() {
     }
   };
 
-  const deleteDataset = async (id: string) => {
+  const handleDeleteDataset = async (id: string) => {
     try {
-      const res = await fetch(`/api/datasets?id=${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setDatasets((prev) => prev.filter((d) => d.id !== id));
-        if (activeDatasetId === id) setActiveDatasetId(null);
-        toast.success("Dataset deleted");
-      }
+      await deleteDataset(id);
+      if (activeDatasetId === id) setActiveDatasetId(null);
+      toast.success("Dataset deleted");
     } catch {
       toast.error("Failed to delete dataset");
     }
@@ -132,26 +133,8 @@ export function SourcesView() {
     async (file: File, datasetId: string) => {
       setIsUploading(true);
       try {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("name", file.name);
-        formData.append("datasetId", datasetId);
-
-        const res = await fetch("/api/sources", {
-          method: "POST",
-          body: formData,
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-
-        setDatasets((prev) =>
-          prev.map((d) =>
-            d.id === datasetId
-              ? { ...d, input_sources: [data.source, ...d.input_sources] }
-              : d
-          )
-        );
+        const source = await api.uploadSourceWithAuth(file, null, file.name, datasetId);
+        addSource(datasetId, source as InputSource);
         toast.success(`Uploaded: ${file.name}`);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to upload file");
@@ -159,7 +142,7 @@ export function SourcesView() {
         setIsUploading(false);
       }
     },
-    []
+    [addSource]
   );
 
   const handleFiles = useCallback(
@@ -186,26 +169,8 @@ export function SourcesView() {
     if (!textInput.trim()) return;
     setIsUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("text", textInput);
-      formData.append("name", textName || "Text Input");
-      formData.append("datasetId", datasetId);
-
-      const res = await fetch("/api/sources", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-
-      setDatasets((prev) =>
-        prev.map((d) =>
-          d.id === datasetId
-            ? { ...d, input_sources: [data.source, ...d.input_sources] }
-            : d
-        )
-      );
+      const source = await api.uploadSourceWithAuth(null, textInput, textName || "Text Input", datasetId);
+      addSource(datasetId, source as InputSource);
       setTextInput("");
       setTextName("");
       setShowTextInput(false);
@@ -217,20 +182,12 @@ export function SourcesView() {
     }
   };
 
-  const deleteSource = async (sourceId: string, datasetId: string) => {
+  const handleDeleteSource = async (sourceId: string, datasetId: string) => {
     try {
-      const res = await fetch(`/api/sources?id=${sourceId}`, { method: "DELETE" });
-      if (res.ok) {
-        setDatasets((prev) =>
-          prev.map((d) =>
-            d.id === datasetId
-              ? { ...d, input_sources: d.input_sources.filter((s) => s.id !== sourceId) }
-              : d
-          )
-        );
-        if (previewSource?.id === sourceId) setPreviewSource(null);
-        toast.success("File removed");
-      }
+      await api.deleteSource(sourceId);
+      removeSource(datasetId, sourceId);
+      if (previewSource?.id === sourceId) setPreviewSource(null);
+      toast.success("File removed");
     } catch {
       toast.error("Failed to remove file");
     }
@@ -277,11 +234,11 @@ export function SourcesView() {
                     className="text-lg font-semibold border rounded px-2 py-1 bg-background"
                     autoFocus
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") updateDataset(activeDataset.id);
+                      if (e.key === "Enter") handleUpdateDataset(activeDataset.id);
                       if (e.key === "Escape") setEditingDatasetId(null);
                     }}
                   />
-                  <Button size="icon-xs" variant="ghost" onClick={() => updateDataset(activeDataset.id)}>
+                  <Button size="icon-xs" variant="ghost" onClick={() => handleUpdateDataset(activeDataset.id)}>
                     <Check className="h-3 w-3" />
                   </Button>
                   <Button size="icon-xs" variant="ghost" onClick={() => setEditingDatasetId(null)}>
@@ -292,7 +249,7 @@ export function SourcesView() {
                 <h2 className="text-lg font-semibold">{activeDataset.name}</h2>
               )}
               <p className="text-sm text-muted-foreground">
-                {activeDataset.input_sources.length} file{activeDataset.input_sources.length !== 1 ? "s" : ""}
+                {(activeDataset.input_sources || []).length} file{(activeDataset.input_sources || []).length !== 1 ? "s" : ""}
                 {activeDataset.description && ` · ${activeDataset.description}`}
               </p>
             </div>
@@ -312,7 +269,7 @@ export function SourcesView() {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                onClick={() => deleteDataset(activeDataset.id)}
+                onClick={() => handleDeleteDataset(activeDataset.id)}
                 title="Delete dataset"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -431,9 +388,14 @@ export function SourcesView() {
             )}
 
             {/* Files list */}
-            {activeDataset.input_sources.length > 0 ? (
+            {isLoadingSources ? (
+              <div className="flex items-center justify-center p-6 border rounded-lg">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Loading files...</span>
+              </div>
+            ) : (activeDataset.input_sources || []).length > 0 ? (
               <div className="space-y-1">
-                {activeDataset.input_sources.map((source) => {
+                {(activeDataset.input_sources || []).map((source) => {
                   const Icon = TYPE_ICONS[source.type] || FileText;
                   return (
                     <div
@@ -470,7 +432,7 @@ export function SourcesView() {
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          onClick={() => deleteSource(source.id, activeDataset.id)}
+                          onClick={() => handleDeleteSource(source.id, activeDataset.id)}
                           title="Delete file"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -480,11 +442,11 @@ export function SourcesView() {
                   );
                 })}
               </div>
-            ) : (
+            ) : !isLoadingSources ? (
               <p className="text-sm text-muted-foreground text-center py-3">
                 No files yet. Upload files or add text to this dataset.
               </p>
-            )}
+            ) : null}
 
             {/* Preview panel */}
             {previewSource && (
@@ -516,7 +478,7 @@ export function SourcesView() {
                   onChange={(e) => setNewDatasetName(e.target.value)}
                   className="w-full text-sm border rounded-md px-3 py-2 bg-background"
                   autoFocus
-                  onKeyDown={(e) => e.key === "Enter" && createDataset()}
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateDataset()}
                 />
                 <input
                   type="text"
@@ -526,7 +488,7 @@ export function SourcesView() {
                   className="w-full text-sm border rounded-md px-3 py-2 bg-background"
                 />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={createDataset} disabled={!newDatasetName.trim()}>
+                  <Button size="sm" onClick={handleCreateDataset} disabled={!newDatasetName.trim()}>
                     <Plus className="h-4 w-4 mr-1" />
                     Create
                   </Button>
@@ -545,12 +507,18 @@ export function SourcesView() {
               </div>
             )}
 
-            {datasets.length > 0 ? (
+            {isLoadingDatasets ? (
+              <div className="flex items-center justify-center p-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Loading datasets...</span>
+              </div>
+            ) : datasets.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {datasets.map((dataset) => {
-                  const fileCount = dataset.input_sources.length;
+                  const sources = dataset.input_sources || [];
+                  const fileCount = sources.length;
                   const typeCounts: Record<string, number> = {};
-                  for (const s of dataset.input_sources) {
+                  for (const s of sources) {
                     typeCounts[s.type] = (typeCounts[s.type] || 0) + 1;
                   }
 
@@ -588,7 +556,7 @@ export function SourcesView() {
                           <Button
                             variant="ghost"
                             size="icon-xs"
-                            onClick={() => deleteDataset(dataset.id)}
+                            onClick={() => handleDeleteDataset(dataset.id)}
                             title="Delete dataset"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -617,7 +585,7 @@ export function SourcesView() {
                   );
                 })}
               </div>
-            ) : (
+            ) : !isLoadingDatasets ? (
               !showNewDataset && (
                 <div className="text-center py-12 text-muted-foreground">
                   <FolderOpen className="h-12 w-12 mx-auto mb-3 opacity-20" />
@@ -629,7 +597,7 @@ export function SourcesView() {
                   </Button>
                 </div>
               )
-            )}
+            ) : null}
 
             {/* Inline edit modal for dataset (when not inside) */}
             {editingDatasetId && !activeDatasetId && (
@@ -642,7 +610,7 @@ export function SourcesView() {
                   className="w-full text-sm border rounded-md px-3 py-2 bg-background"
                   autoFocus
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") updateDataset(editingDatasetId);
+                    if (e.key === "Enter") handleUpdateDataset(editingDatasetId);
                     if (e.key === "Escape") setEditingDatasetId(null);
                   }}
                 />
@@ -654,7 +622,7 @@ export function SourcesView() {
                   className="w-full text-sm border rounded-md px-3 py-2 bg-background"
                 />
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => updateDataset(editingDatasetId)}>
+                  <Button size="sm" onClick={() => handleUpdateDataset(editingDatasetId)}>
                     <Check className="h-4 w-4 mr-1" />
                     Save
                   </Button>

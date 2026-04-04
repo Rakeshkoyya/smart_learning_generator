@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -25,14 +25,9 @@ import {
   File,
 } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  Dataset,
-  SavedPrompt,
-  PromptChain,
-  PromptFolder,
-  Generation,
-  ModelOption,
-} from "@/lib/types";
+import type { ModelOption, Generation } from "@/lib/types";
+import * as api from "@/lib/api";
+import { useWorkspace } from "@/lib/workspace-context";
 
 const AVAILABLE_MODELS: ModelOption[] = [
   { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash" },
@@ -60,12 +55,19 @@ const TYPE_ICONS: Record<string, React.ElementType> = {
 type PromptMode = "single" | "chain";
 
 export function GenerateView() {
-  // Data
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
-  const [folders, setFolders] = useState<PromptFolder[]>([]);
-  const [allPrompts, setAllPrompts] = useState<SavedPrompt[]>([]);
-  const [chains, setChains] = useState<PromptChain[]>([]);
-  const [generations, setGenerations] = useState<Generation[]>([]);
+  // Use workspace context
+  const {
+    datasets,
+    folders,
+    prompts: allPrompts,
+    chains,
+    generations,
+    isLoadingDatasets,
+    isLoadingPrompts,
+    addGeneration,
+  } = useWorkspace();
+  
+  const isLoadingData = isLoadingDatasets || isLoadingPrompts;
 
   // Step 1: Dataset + file selection
   const [selectedDatasetId, setSelectedDatasetId] = useState<string>("");
@@ -87,26 +89,6 @@ export function GenerateView() {
   const [showHistory, setShowHistory] = useState(false);
   const [exportDialog, setExportDialog] = useState<{ format: "docx" | "txt" } | null>(null);
   const [exportFilename, setExportFilename] = useState("");
-
-  // Fetch all data
-  useEffect(() => {
-    const safeFetch = (url: string) =>
-      fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-
-    Promise.all([
-      safeFetch("/api/datasets"),
-      safeFetch("/api/prompt-folders"),
-      safeFetch("/api/prompts"),
-      safeFetch("/api/prompt-chains"),
-      safeFetch("/api/generations?limit=20"),
-    ]).then(([dsData, folderData, promptData, chainData, genData]) => {
-      if (dsData?.datasets) setDatasets(dsData.datasets);
-      if (folderData?.folders) setFolders(folderData.folders);
-      if (promptData?.prompts) setAllPrompts(promptData.prompts);
-      if (chainData?.chains) setChains(chainData.chains);
-      if (genData?.generations) setGenerations(genData.generations);
-    });
-  }, []);
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
   const selectedPrompt = allPrompts.find((p) => p.id === selectedPromptId);
@@ -133,43 +115,49 @@ export function GenerateView() {
     setCurrentGenerationId(null);
 
     try {
-      const body: Record<string, unknown> = {
-        sourceIds: selectedSourceIds,
-        model: selectedModel,
-        title: sessionTitle,
-      };
-
-      if (promptMode === "chain" && selectedChainId) {
-        body.chainId = selectedChainId;
-      } else {
-        const prompt = allPrompts.find((p) => p.id === selectedPromptId);
-        if (!prompt) {
-          toast.error("Please select a prompt template");
-          setIsRunning(false);
-          return;
-        }
-        body.promptText = prompt.text;
-        if (prompt.response_format) {
-          body.formatText = prompt.response_format.template_text;
-        }
+      const prompt = allPrompts.find((p) => p.id === selectedPromptId);
+      if (!prompt && promptMode !== "chain") {
+        toast.error("Please select a prompt template");
+        setIsRunning(false);
+        return;
       }
 
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+      const data = await api.generate({
+        source_ids: selectedSourceIds,
+        prompt_text: prompt?.text || "",
+        format_text: prompt?.response_format?.template_text,
+        model: selectedModel,
+        title: sessionTitle,
+        chain_id: promptMode === "chain" ? selectedChainId : undefined,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Generation failed");
+      console.log("[generate-view] API response:", {
+        hasContent: !!data.content,
+        contentLength: data.content?.length,
+        contentPreview: data.content?.substring(0, 200),
+        generationId: data.generation_id,
+      });
 
       setGeneratedContent(data.content);
-      setCurrentGenerationId(data.generationId);
+      setCurrentGenerationId(data.generation_id);
       toast.success("Content generated!");
-      // Refresh history
-      const genRes = await fetch("/api/generations?limit=20");
-      const genData = await genRes.json();
-      if (genData.generations) setGenerations(genData.generations);
+      
+      // Add to generations in context
+      if (data.generation_id) {
+        addGeneration({
+          id: data.generation_id,
+          user_id: "",
+          title: sessionTitle,
+          prompt_text: "",
+          response_format_text: null,
+          model_used: selectedModel,
+          status: "completed",
+          error_message: null,
+          prompt_chain_id: promptMode === "chain" ? (selectedChainId ?? null) : null,
+          response_content: data.content,
+          created_at: new Date().toISOString(),
+        });
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Generation failed");
     } finally {
@@ -206,34 +194,24 @@ export function GenerateView() {
       try {
         const title = filename || "Generated Document";
         const prompt = allPrompts.find((p) => p.id === selectedPromptId);
-        const promptText = prompt?.text || "";
-        let res: Response;
+        let blob: Blob;
 
         if (format === "docx") {
-          res = await fetch("/api/export-docx", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title,
-              results: [{ prompt: promptText, response: generatedContent }],
-              generationId: currentGenerationId,
-            }),
+          blob = await api.exportDocx({
+            title,
+            results: [{ prompt_name: prompt?.name || "Prompt", content: generatedContent }],
+            generation_id: currentGenerationId || undefined,
+            dataset_id: selectedDatasetId || undefined,
           });
         } else {
-          res = await fetch("/api/export-txt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title,
-              content: generatedContent,
-              generationId: currentGenerationId,
-            }),
+          blob = await api.exportTxt({
+            title,
+            content: generatedContent,
+            generation_id: currentGenerationId || undefined,
+            dataset_id: selectedDatasetId || undefined,
           });
         }
 
-        if (!res.ok) throw new Error("Export failed");
-
-        const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -269,7 +247,7 @@ export function GenerateView() {
   const handleDatasetChange = (datasetId: string) => {
     setSelectedDatasetId(datasetId);
     const ds = datasets.find((d) => d.id === datasetId);
-    if (ds) {
+    if (ds && ds.input_sources) {
       setSelectedSourceIds(ds.input_sources.map((s) => s.id));
     } else {
       setSelectedSourceIds([]);
@@ -277,7 +255,7 @@ export function GenerateView() {
   };
 
   const toggleSelectAll = () => {
-    if (!selectedDataset) return;
+    if (!selectedDataset || !selectedDataset.input_sources) return;
     const allIds = selectedDataset.input_sources.map((s) => s.id);
     if (selectedSourceIds.length === allIds.length) {
       setSelectedSourceIds([]);
@@ -394,7 +372,12 @@ export function GenerateView() {
               )}
             </h3>
 
-            {datasets.length === 0 ? (
+            {isLoadingData ? (
+              <div className="flex items-center justify-center p-6 border rounded-lg">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Loading datasets...</span>
+              </div>
+            ) : datasets.length === 0 ? (
               <p className="text-sm text-muted-foreground border rounded-lg p-3 text-center">
                 No datasets available. Go to Sources to create one.
               </p>
@@ -410,7 +393,7 @@ export function GenerateView() {
                     <option value="">Select a dataset...</option>
                     {datasets.map((ds) => (
                       <option key={ds.id} value={ds.id}>
-                        {ds.name} ({ds.input_sources.length} files)
+                        {ds.name} ({ds.input_sources?.length ?? 0} files)
                       </option>
                     ))}
                   </select>
@@ -418,7 +401,7 @@ export function GenerateView() {
                 </div>
 
                 {/* File selection within dataset */}
-                {selectedDataset && selectedDataset.input_sources.length > 0 && (
+                {selectedDataset && (selectedDataset.input_sources?.length ?? 0) > 0 && (
                   <div className="border rounded-lg overflow-hidden">
                     <div className="flex items-center justify-between px-3 py-2 bg-muted/30 border-b">
                       <span className="text-xs font-medium text-muted-foreground">
@@ -428,13 +411,13 @@ export function GenerateView() {
                         onClick={toggleSelectAll}
                         className="text-xs text-primary hover:underline"
                       >
-                        {selectedSourceIds.length === selectedDataset.input_sources.length
+                        {selectedSourceIds.length === (selectedDataset.input_sources?.length ?? 0)
                           ? "Deselect all"
                           : "Select all"}
                       </button>
                     </div>
                     <div className="space-y-0.5 max-h-40 overflow-y-auto p-1.5">
-                      {selectedDataset.input_sources.map((source) => {
+                      {(selectedDataset.input_sources ?? []).map((source) => {
                         const Icon = TYPE_ICONS[source.type] || FileText;
                         const isSelected = selectedSourceIds.includes(source.id);
                         return (
@@ -470,7 +453,7 @@ export function GenerateView() {
                   </div>
                 )}
 
-                {selectedDataset && selectedDataset.input_sources.length === 0 && (
+                {selectedDataset && (selectedDataset.input_sources?.length ?? 0) === 0 && (
                   <p className="text-xs text-muted-foreground border rounded-lg p-3 text-center">
                     This dataset has no files. Go to Sources to upload files.
                   </p>
@@ -516,28 +499,35 @@ export function GenerateView() {
             {promptMode === "single" ? (
               <div className="space-y-3">
                 {/* Prompt selector */}
-                <div className="relative">
-                  <select
-                    value={selectedPromptId}
-                    onChange={(e) => setSelectedPromptId(e.target.value)}
-                    className="w-full h-9 pl-3 pr-8 text-sm border rounded-md bg-background appearance-none cursor-pointer"
-                  >
-                    <option value="">Select a prompt template...</option>
-                    {folders.map((folder) => (
-                      <optgroup key={folder.id} label={folder.name}>
-                        {(folder.prompts || []).map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                            {p.response_format
-                              ? ` [${p.response_format.name}]`
-                              : ""}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                  <ChevronDown className="h-3 w-3 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground" />
-                </div>
+                {isLoadingData ? (
+                  <div className="flex items-center justify-center p-4 border rounded-lg">
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <span className="ml-2 text-sm text-muted-foreground">Loading prompts...</span>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select
+                      value={selectedPromptId}
+                      onChange={(e) => setSelectedPromptId(e.target.value)}
+                      className="w-full h-9 pl-3 pr-8 text-sm border rounded-md bg-background appearance-none cursor-pointer"
+                    >
+                      <option value="">Select a prompt template...</option>
+                      {folders.map((folder) => (
+                        <optgroup key={folder.id} label={folder.name}>
+                          {(folder.prompts || []).map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                              {p.response_format
+                                ? ` [${p.response_format.name}]`
+                                : ""}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    <ChevronDown className="h-3 w-3 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground" />
+                  </div>
+                )}
 
                 {/* Selected prompt info */}
                 {selectedPrompt && (

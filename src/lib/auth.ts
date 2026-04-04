@@ -1,8 +1,9 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
+import { SignJWT } from "jose";
 import bcrypt from "bcryptjs";
-import { prisma } from "./prisma";
+import { supabase } from "./supabase";
 
 declare module "next-auth" {
   interface User {
@@ -18,10 +19,8 @@ declare module "next-auth" {
       role: string;
       is_approved: boolean;
     };
+    accessToken?: string;
   }
-}
-
-declare module "next-auth" {
   interface JWT {
     id: string;
     role: string;
@@ -47,9 +46,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         if (!email || !password) return null;
 
-        const user = await prisma.user.findFirst({
-          where: { email, auth_provider: "credentials" },
-        });
+        const { data: user } = await supabase
+          .from("users")
+          .select("*")
+          .eq("email", email)
+          .eq("auth_provider", "credentials")
+          .single();
 
         if (!user || !user.password_hash) return null;
 
@@ -74,37 +76,40 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
-        const existing = await prisma.user.findUnique({
-          where: { email: user.email! },
-        });
+        const { data: existing } = await supabase
+          .from("users")
+          .select("*")
+          .eq("email", user.email!)
+          .single();
 
         if (existing) {
-          await prisma.user.update({
-            where: { id: existing.id },
-            data: {
-              name: user.name,
-              avatar_url: user.image,
-            },
-          });
+          await supabase
+            .from("users")
+            .update({ name: user.name, avatar_url: user.image })
+            .eq("id", existing.id);
 
           user.id = existing.id;
           user.role = existing.role;
           user.is_approved = existing.is_approved;
         } else {
-          const newUser = await prisma.user.create({
-            data: {
+          const { data: newUser } = await supabase
+            .from("users")
+            .insert({
               email: user.email!,
               name: user.name,
               avatar_url: user.image,
-              role: "user",
+              role: "pending",
               is_approved: false,
               auth_provider: "google",
-            },
-          });
+            })
+            .select()
+            .single();
 
-          user.id = newUser.id;
-          user.role = newUser.role;
-          user.is_approved = newUser.is_approved;
+          if (newUser) {
+            user.id = newUser.id;
+            user.role = newUser.role;
+            user.is_approved = newUser.is_approved;
+          }
         }
       }
       return true;
@@ -117,14 +122,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       }
 
       // Refresh user data from DB only on explicit session update
-      // (not every request — middleware runs in Edge where Prisma isn't available)
       if (trigger === "update") {
         const tokenId = token.id as string;
         if (tokenId) {
-          const dbUser = await prisma.user.findUnique({
-            where: { id: tokenId },
-            select: { role: true, is_approved: true },
-          });
+          const { data: dbUser } = await supabase
+            .from("users")
+            .select("role, is_approved")
+            .eq("id", tokenId)
+            .single();
 
           if (dbUser) {
             token.role = dbUser.role;
@@ -139,10 +144,26 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.user.id = token.id as string;
       session.user.role = token.role as string;
       session.user.is_approved = token.is_approved as boolean;
+      
+      // Create a standard HS256 signed JWT for backend API calls
+      const secret = new TextEncoder().encode(process.env.AUTH_SECRET!);
+      session.accessToken = await new SignJWT({
+        sub: token.id as string,
+        id: token.id as string,
+        email: session.user.email,
+        role: token.role as string,
+        is_approved: token.is_approved as boolean,
+      })
+        .setProtectedHeader({ alg: "HS256" })
+        .setIssuedAt()
+        .setExpirationTime("30d")
+        .sign(secret);
+      
       return session;
     },
   },
   session: {
     strategy: "jwt",
+    maxAge: 30 * 24 * 60 * 60, // 30 days - persist session across browser closes
   },
 });

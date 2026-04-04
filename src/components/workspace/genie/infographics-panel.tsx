@@ -18,6 +18,7 @@ import {
   type InfographicStyle,
   type DetailLevel,
 } from "./infographics-config";
+import { getAuthHeaders, API_BASE_URL } from "@/lib/api";
 
 interface InfographicsPanelProps {
   selectedSourceIds: string[];
@@ -80,76 +81,84 @@ export function InfographicsPanel({
     setResult(null);
 
     try {
-      const res = await fetch("/api/genie/infographics", {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_BASE_URL}/api/genie/infographics`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({
-          sourceIds: selectedSourceIds,
+          source_ids: selectedSourceIds,
+          dataset_id: selectedDatasetId || undefined,
           model: selectedModel,
-          dimensionId,
+          dimension_id: dimensionId,
           style,
-          detailLevel,
+          detail_level: detailLevel,
           filename: filename.trim(),
         }),
       });
 
-      // Stream-like progress via response
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        throw new Error(errBody.detail || `HTTP ${res.status}`);
+      }
+
       const reader = res.body?.getReader();
       if (!reader) throw new Error("No response stream");
 
       const decoder = new TextDecoder();
-      let fullText = "";
+      let buffer = "";
+
+      let errorFromStream: string | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        fullText += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true });
 
-        // Parse progress events
-        const lines = fullText.split("\n");
+        // Process complete SSE lines (split by double-newline or newline)
+        const lines = buffer.split("\n");
+        // Keep the last (potentially incomplete) line in the buffer
+        buffer = lines.pop() ?? "";
+
         for (const line of lines) {
-          if (line.startsWith("event:")) {
-            const eventType = line.replace("event:", "").trim();
-            if (eventType === "summarizing") setStep("summarizing");
-            else if (eventType === "prompting") setStep("prompting");
-            else if (eventType === "generating") setStep("generating");
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const jsonStr = trimmed.slice(5).trim();
+          if (!jsonStr) continue;
+
+          let event: Record<string, unknown>;
+          try {
+            event = JSON.parse(jsonStr);
+          } catch {
+            continue;
+          }
+
+          if (event.error) {
+            errorFromStream = event.error as string;
+            break;
+          }
+
+          if (event.step === 1) setStep("summarizing");
+          else if (event.step === 2) setStep("prompting");
+          else if (event.step === 3 || event.step === 4) setStep("generating");
+
+          if (event.complete && !event.step) {
+            setResult({
+              imageUrl: (event.image_url as string) ?? "",
+              filename: (event.filename as string) ?? "",
+              summary: (event.summary as string) ?? "",
+              imagePrompt: (event.image_prompt as string) ?? "",
+              exportId: (event.export_id as string) ?? null,
+            });
+            setStep("done");
+            toast.success("Infographic generated successfully!");
           }
         }
+
+        if (errorFromStream) break;
       }
 
-      // Parse final JSON from the accumulated text
-      const jsonMatch = fullText.match(/data:final:(.*)/);
-      if (jsonMatch) {
-        const data = JSON.parse(jsonMatch[1]);
-        if (data.error) {
-          throw new Error(data.error);
-        }
-        setResult({
-          imageUrl: data.imageUrl,
-          filename: data.filename,
-          summary: data.summary,
-          imagePrompt: data.imagePrompt,
-          exportId: data.exportId ?? null,
-        });
-        setStep("done");
-        toast.success("Infographic generated successfully!");
-      } else {
-        // Fallback: try parsing entire response as JSON
-        try {
-          const data = JSON.parse(fullText);
-          if (data.error) throw new Error(data.error);
-          setResult({
-            imageUrl: data.imageUrl,
-            filename: data.filename,
-            summary: data.summary,
-            imagePrompt: data.imagePrompt,
-            exportId: data.exportId ?? null,
-          });
-          setStep("done");
-          toast.success("Infographic generated successfully!");
-        } catch {
-          throw new Error("Unexpected response format");
-        }
+      if (errorFromStream) {
+        throw new Error(errorFromStream);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Generation failed";
@@ -171,7 +180,10 @@ export function InfographicsPanel({
 
     if (result.exportId) {
       // Download via exports API (from "exports" bucket)
-      const res = await fetch(`/api/exports/download?id=${result.exportId}`);
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${API_BASE_URL}/api/exports/${result.exportId}/download`, {
+        headers: authHeaders,
+      });
       if (!res.ok) {
         toast.error("Download failed");
         return;
@@ -180,7 +192,7 @@ export function InfographicsPanel({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${result.filename}.png`;
+      a.download = result.filename || "infographic.png";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -189,7 +201,7 @@ export function InfographicsPanel({
       // Fallback: direct data URL download
       const a = document.createElement("a");
       a.href = result.imageUrl;
-      a.download = `${result.filename}.png`;
+      a.download = result.filename || "infographic.png";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -408,7 +420,7 @@ export function InfographicsPanel({
       {/* Bottom bar */}
       <div className="px-4 py-3 border-t flex items-center justify-between">
         <p className="text-[10px] text-muted-foreground">
-          Image model: google/gemini-3.1-flash-image-preview
+          Text model: {selectedModel} • Image model: Gemini image fallback chain
         </p>
         <Button
           size="sm"

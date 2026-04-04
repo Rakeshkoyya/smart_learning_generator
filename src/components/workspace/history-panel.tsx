@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { History, Trash2, Eye, Loader2, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import type { Generation } from "@/lib/types";
+import * as api from "@/lib/api";
 
 interface HistoryPanelProps {
   onLoadGeneration: (generation: Generation) => void;
@@ -18,9 +19,8 @@ export function HistoryPanel({ onLoadGeneration }: HistoryPanelProps) {
 
   const fetchHistory = useCallback(async () => {
     try {
-      const res = await fetch("/api/generations?limit=20");
-      const data = await res.json();
-      if (res.ok) setGenerations(data.generations);
+      const data = await api.getGenerations(20, 0);
+      setGenerations(data.generations);
     } catch {
       /* ignore */
     } finally {
@@ -32,13 +32,11 @@ export function HistoryPanel({ onLoadGeneration }: HistoryPanelProps) {
     if (isOpen) fetchHistory();
   }, [isOpen, fetchHistory]);
 
-  const deleteGeneration = async (id: string) => {
+  const handleDeleteGeneration = async (id: string) => {
     try {
-      const res = await fetch(`/api/generations?id=${id}`, { method: "DELETE" });
-      if (res.ok) {
-        setGenerations((prev) => prev.filter((g) => g.id !== id));
-        toast.success("Generation deleted");
-      }
+      await api.deleteGeneration(id);
+      setGenerations((prev) => prev.filter((g) => g.id !== id));
+      toast.success("Generation deleted");
     } catch {
       toast.error("Failed to delete");
     }
@@ -109,7 +107,7 @@ export function HistoryPanel({ onLoadGeneration }: HistoryPanelProps) {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      onClick={() => deleteGeneration(gen.id)}
+                      onClick={() => handleDeleteGeneration(gen.id)}
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>

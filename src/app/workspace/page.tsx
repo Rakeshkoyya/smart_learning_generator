@@ -1,15 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Sidebar, type SidebarSection } from "@/components/workspace/sidebar";
 import { GenerateView } from "@/components/workspace/generate-view";
 import { PromptsView } from "@/components/workspace/prompts-view";
 import { SourcesView } from "@/components/workspace/sources-view";
 import { ExportsView } from "@/components/workspace/exports-view";
 import { GenieView } from "@/components/workspace/genie/genie-view";
+import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 
-export default function WorkspacePage() {
+function WorkspaceContent() {
   const [activeSection, setActiveSection] = useState<SidebarSection>("generate");
+  const { fetchAll } = useWorkspace();
+
+  // Fetch all data on initial mount
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
 
   const isGenie = activeSection === "genie";
 
@@ -28,5 +35,13 @@ export default function WorkspacePage() {
         {activeSection === "genie" && <GenieView />}
       </main>
     </div>
+  );
+}
+
+export default function WorkspacePage() {
+  return (
+    <WorkspaceProvider>
+      <WorkspaceContent />
+    </WorkspaceProvider>
   );
 }

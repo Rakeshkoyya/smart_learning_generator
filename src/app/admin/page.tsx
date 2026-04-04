@@ -15,18 +15,17 @@ import {
   Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { DbUser } from "@/lib/types";
+import { getUsers, updateUserApproval, type User } from "@/lib/api";
 
 export default function AdminPage() {
-  const [users, setUsers] = useState<DbUser[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async () => {
     try {
-      const res = await fetch("/api/admin/users");
-      const data = await res.json();
-      if (res.ok) setUsers(data.users);
+      const data = await getUsers();
+      setUsers(data);
     } catch {
       toast.error("Failed to load users");
     } finally {
@@ -38,27 +37,17 @@ export default function AdminPage() {
     fetchUsers();
   }, [fetchUsers]);
 
-  const toggleApproval = async (userId: string, currentStatus: boolean) => {
+  const toggleApproval = async (userId: string, currentlyApproved: boolean) => {
     setToggling(userId);
+    const newApproval = !currentlyApproved;
     try {
-      const res = await fetch("/api/admin/users", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, is_approved: !currentStatus }),
-      });
-      if (res.ok) {
-        setUsers((prev) =>
-          prev.map((u) =>
-            u.id === userId ? { ...u, is_approved: !currentStatus } : u
-          )
-        );
-        toast.success(
-          !currentStatus ? "User approved" : "User access revoked"
-        );
-      } else {
-        const data = await res.json();
-        toast.error(data.error || "Failed to update user");
-      }
+      const updated = await updateUserApproval(userId, newApproval);
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? updated : u))
+      );
+      toast.success(
+        newApproval ? "User approved" : "User access revoked"
+      );
     } catch {
       toast.error("Failed to update user");
     } finally {
@@ -172,7 +161,7 @@ export default function AdminPage() {
                           </Badge>
                         </td>
                         <td className="py-3">
-                          {user.is_approved ? (
+                          {user.is_approved || user.role === "admin" ? (
                             <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
                               Approved
                             </Badge>
