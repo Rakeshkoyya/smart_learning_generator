@@ -137,3 +137,45 @@ export interface ExportedDocument {
   created_at: string;
   generation?: Generation;
 }
+
+// ── DocForge types ──
+
+export interface DocForgePlaceholder {
+  name: string;
+  label: string;
+  original_text: string;
+  default_value: string;
+}
+
+export interface DocForgeTemplate {
+  id: string;
+  user_id?: string;
+  name: string;
+  description: string | null;
+  original_filename: string;
+  html_preview: string | null;
+  placeholders: DocForgePlaceholder[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocForgeFolder {
+  id: string;
+  user_id?: string;
+  name: string;
+  document_count: number;
+  created_at: string;
+}
+
+export interface DocForgeDocument {
+  id: string;
+  user_id?: string;
+  template_id: string | null;
+  folder_id: string | null;
+  folder_name: string | null;
+  template_name: string | null;
+  name: string;
+  placeholder_values: Record<string, string>;
+  file_size: number | null;
+  created_at: string;
+}

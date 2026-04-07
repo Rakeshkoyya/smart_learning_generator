@@ -17,10 +17,14 @@ import {
   Check,
   X,
   Database,
+  FileSignature,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { ExportedDocument } from "@/lib/api";
 import * as api from "@/lib/api";
+import { DocForgeExports } from "./docforge/docforge-exports";
+
+type ExportTab = "content" | "docforge";
 
 interface DatasetGroup {
   datasetId: string | null;
@@ -29,6 +33,7 @@ interface DatasetGroup {
 }
 
 export function ExportsView() {
+  const [activeTab, setActiveTab] = useState<ExportTab>("content");
   const [exports, setExports] = useState<ExportedDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeDataset, setActiveDataset] = useState<string | null>(null);
@@ -134,6 +139,43 @@ export function ExportsView() {
 
   return (
     <div className="h-full flex flex-col">
+      {/* Tab navbar */}
+      <div className="px-6 pt-4 border-b shrink-0">
+        <div className="flex gap-4">
+          <button
+            className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "content"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={() => setActiveTab("content")}
+          >
+            <div className="flex items-center gap-1.5">
+              <Download className="h-4 w-4" />
+              Content Exports
+            </div>
+          </button>
+          <button
+            className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "docforge"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={() => setActiveTab("docforge")}
+          >
+            <div className="flex items-center gap-1.5">
+              <FileSignature className="h-4 w-4" />
+              DocForge
+            </div>
+          </button>
+        </div>
+      </div>
+
+      {activeTab === "docforge" ? (
+        <DocForgeExports />
+      ) : (
+      /* Content Exports tab */
+      <>
       <div className="px-6 py-4 border-b">
         {activeGroup ? (
           <div className="flex items-center gap-3">
@@ -291,6 +333,8 @@ export function ExportsView() {
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

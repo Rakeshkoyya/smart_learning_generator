@@ -802,3 +802,204 @@ export async function getWorkflow(id: string): Promise<WorkflowRun> {
 export async function cancelWorkflow(id: string): Promise<void> {
   await apiRequest(`/api/workflows/${id}/cancel`, { method: "POST" });
 }
+
+// ============= DocForge – Templates =============
+
+export interface DocForgePlaceholder {
+  name: string;
+  label: string;
+  original_text: string;
+  default_value: string;
+}
+
+export interface DocForgeTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  original_filename: string;
+  html_preview: string | null;
+  placeholders: DocForgePlaceholder[];
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getDocForgeTemplates(): Promise<{
+  templates: DocForgeTemplate[];
+  total: number;
+}> {
+  return apiRequest("/api/docforge/templates");
+}
+
+export async function getDocForgeTemplate(id: string): Promise<DocForgeTemplate> {
+  return apiRequest(`/api/docforge/templates/${id}`);
+}
+
+export async function uploadDocForgeTemplate(
+  file: File,
+  name: string,
+  description: string | null,
+  placeholders: DocForgePlaceholder[]
+): Promise<DocForgeTemplate> {
+  const headers = await getAuthHeaders();
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("name", name);
+  if (description) formData.append("description", description);
+  formData.append("placeholders", JSON.stringify(placeholders));
+
+  delete headers["Content-Type"];
+
+  const response = await fetch(`${API_BASE_URL}/api/docforge/templates`, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(error.detail);
+  }
+
+  return response.json();
+}
+
+export async function updateDocForgeTemplate(
+  id: string,
+  data: {
+    name?: string;
+    description?: string | null;
+    placeholders?: DocForgePlaceholder[];
+    file?: File;
+  }
+): Promise<DocForgeTemplate> {
+  const headers = await getAuthHeaders();
+  const formData = new FormData();
+  if (data.name) formData.append("name", data.name);
+  if (data.description !== undefined && data.description !== null)
+    formData.append("description", data.description);
+  if (data.placeholders)
+    formData.append("placeholders", JSON.stringify(data.placeholders));
+  if (data.file) formData.append("file", data.file);
+
+  delete headers["Content-Type"];
+
+  const response = await fetch(`${API_BASE_URL}/api/docforge/templates/${id}`, {
+    method: "PUT",
+    headers,
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Update failed" }));
+    throw new Error(error.detail);
+  }
+
+  return response.json();
+}
+
+export async function deleteDocForgeTemplate(id: string): Promise<void> {
+  await apiRequest(`/api/docforge/templates/${id}`, { method: "DELETE" });
+}
+
+// ============= DocForge – Preview & Generate =============
+
+export async function previewDocForgeTemplate(
+  id: string,
+  placeholderValues: Record<string, string>
+): Promise<{ html: string }> {
+  return apiRequest(`/api/docforge/templates/${id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ placeholder_values: placeholderValues }),
+  });
+}
+
+export async function generateDocForgeDocument(data: {
+  template_id: string;
+  placeholder_values: Record<string, string>;
+  filename: string;
+  folder_id?: string;
+  folder_name?: string;
+}): Promise<DocForgeDocument> {
+  return apiRequest(`/api/docforge/templates/${data.template_id}/generate`, {
+    method: "POST",
+    body: JSON.stringify({
+      template_id: data.template_id,
+      placeholder_values: data.placeholder_values,
+      filename: data.filename,
+      folder_id: data.folder_id,
+      folder_name: data.folder_name,
+    }),
+  });
+}
+
+// ============= DocForge – Folders =============
+
+export interface DocForgeFolder {
+  id: string;
+  name: string;
+  document_count: number;
+  created_at: string;
+}
+
+export async function getDocForgeFolders(search?: string): Promise<{
+  folders: DocForgeFolder[];
+  total: number;
+}> {
+  const endpoint = search
+    ? `/api/docforge/folders?search=${encodeURIComponent(search)}`
+    : "/api/docforge/folders";
+  return apiRequest(endpoint);
+}
+
+export async function createDocForgeFolder(name: string): Promise<DocForgeFolder> {
+  return apiRequest("/api/docforge/folders", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteDocForgeFolder(id: string): Promise<void> {
+  await apiRequest(`/api/docforge/folders/${id}`, { method: "DELETE" });
+}
+
+// ============= DocForge – Documents =============
+
+export interface DocForgeDocument {
+  id: string;
+  template_id: string | null;
+  folder_id: string | null;
+  folder_name: string | null;
+  template_name: string | null;
+  name: string;
+  placeholder_values: Record<string, string>;
+  file_size: number | null;
+  created_at: string;
+}
+
+export async function getDocForgeDocuments(folderId?: string): Promise<{
+  documents: DocForgeDocument[];
+  total: number;
+}> {
+  const endpoint = folderId
+    ? `/api/docforge/documents?folder_id=${folderId}`
+    : "/api/docforge/documents";
+  return apiRequest(endpoint);
+}
+
+export async function downloadDocForgeDocument(id: string): Promise<Blob> {
+  const headers = await getAuthHeaders();
+
+  const response = await fetch(`${API_BASE_URL}/api/docforge/documents/${id}/download`, {
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error("Download failed");
+  }
+
+  return response.blob();
+}
+
+export async function deleteDocForgeDocument(id: string): Promise<void> {
+  await apiRequest(`/api/docforge/documents/${id}`, { method: "DELETE" });
+}
