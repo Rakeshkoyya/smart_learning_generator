@@ -437,11 +437,15 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   }, []);
 
   const updateChain = useCallback(async (id: string, data: { name?: string; description?: string; steps?: { prompt_id: string }[] }): Promise<PromptChain> => {
-    // Note: updatePromptChain doesn't exist in API yet, so we delete and recreate
-    // For now, just return the existing chain
-    const existing = chains.find(c => c.id === id);
-    return existing || ({} as PromptChain);
-  }, [chains]);
+    const stepsWithOrder = data.steps?.map((s, i) => ({
+      ...s,
+      step_order: i + 1,
+    }));
+    const chain = await api.updatePromptChain(id, { ...data, steps: stepsWithOrder });
+    const updated = chain as unknown as PromptChain;
+    setChains(prev => prev.map(c => c.id === id ? updated : c));
+    return updated;
+  }, []);
 
   const deleteChain = useCallback(async (id: string): Promise<void> => {
     await api.deletePromptChain(id);

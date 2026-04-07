@@ -10,7 +10,7 @@ export function GenieView() {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [selectedFeature, setSelectedFeature] = useState<GenieFeature | null>(null);
-  const [selectedModel, setSelectedModel] = useState("google/gemini-3-flash-preview");
+  const [selectedModel, setSelectedModel] = useState("google/gemini-3.1-flash-image-preview");
 
   return (
     <div className="h-full flex overflow-hidden">

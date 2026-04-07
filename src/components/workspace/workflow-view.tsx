@@ -29,7 +29,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 import type { ModelOption } from "@/lib/types";
 
 const AVAILABLE_MODELS: ModelOption[] = [
-  { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash" },
+  { id: "google/gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash" },
   { id: "google/gemini-2.5-pro-preview-03-25", label: "Gemini 2.5 Pro" },
   { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
   { id: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
@@ -81,7 +81,7 @@ export function WorkflowView() {
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [selectedChainId, setSelectedChainId] = useState("");
-  const [outputFormat, setOutputFormat] = useState<"docx" | "txt">("docx");
+  const [outputFormat, setOutputFormat] = useState<"docx" | "txt" | "pdf">("docx");
   const [filenamePrefix, setFilenamePrefix] = useState("");
   const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS[0].id);
 
@@ -299,7 +299,7 @@ interface SetupViewProps {
   selectedSourceIds: string[];
   selectedChainId: string;
   selectedChain: ReturnType<typeof useWorkspace>["chains"][number] | null;
-  outputFormat: "docx" | "txt";
+  outputFormat: "docx" | "txt" | "pdf";
   filenamePrefix: string;
   selectedModel: string;
   isLoadingData: boolean;
@@ -309,7 +309,7 @@ interface SetupViewProps {
   onToggleSource: (id: string) => void;
   onToggleSelectAll: () => void;
   onChainChange: (id: string) => void;
-  onFormatChange: (f: "docx" | "txt") => void;
+  onFormatChange: (f: "docx" | "txt" | "pdf") => void;
   onPrefixChange: (p: string) => void;
   onModelChange: (m: string) => void;
   onStart: () => void;
@@ -498,6 +498,16 @@ function SetupView(props: SetupViewProps) {
               }`}
             >
               DOCX
+            </button>
+            <button
+              onClick={() => onFormatChange("pdf")}
+              className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                outputFormat === "pdf"
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background hover:bg-muted"
+              }`}
+            >
+              PDF
             </button>
             <button
               onClick={() => onFormatChange("txt")}

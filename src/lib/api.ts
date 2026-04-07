@@ -337,6 +337,24 @@ export async function createPromptChain(data: {
   });
 }
 
+export async function updatePromptChain(
+  id: string,
+  data: {
+    name?: string;
+    description?: string;
+    steps?: Array<{
+      step_order: number;
+      prompt_id: string;
+      response_format_id?: string;
+    }>;
+  }
+): Promise<PromptChain> {
+  return apiRequest(`/api/prompt-chains/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
 export async function deletePromptChain(id: string): Promise<void> {
   await apiRequest(`/api/prompt-chains/${id}`, { method: "DELETE" });
 }
@@ -350,6 +368,8 @@ export interface GenerateRequest {
   model?: string;
   title?: string;
   chain_id?: string;
+  grade?: string;
+  subject?: string;
 }
 
 export interface GenerateResponse {
@@ -369,6 +389,89 @@ export async function generate(data: GenerateRequest): Promise<GenerateResponse>
       chain_id: data.chain_id,
     }),
   });
+}
+
+// Chain generation with SSE progress streaming
+export interface ChainStreamEvent {
+  event: "planning" | "step_start" | "step_complete" | "done" | "error";
+  data: {
+    step?: number;
+    total_steps?: number;
+    step_name?: string;
+    content?: string;
+    generation_id?: string;
+    message?: string;
+    status?: string;
+  };
+}
+
+export async function generateChainStream(
+  data: GenerateRequest,
+  onEvent: (event: ChainStreamEvent) => void,
+): Promise<void> {
+  const headers = await getAuthHeaders();
+
+  const response = await fetch(`${API_BASE_URL}/api/generate/chain-stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source_ids: data.source_ids,
+      prompt_text: data.prompt_text || "",
+      model: data.model || "anthropic/claude-3.5-sonnet",
+      title: data.title,
+      chain_id: data.chain_id,
+      grade: data.grade,
+      subject: data.subject,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Request failed" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events from buffer
+    const parts = buffer.split("\n\n");
+    // Keep the last incomplete part in the buffer
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      let eventType = "message";
+      let eventData = "";
+
+      for (const line of part.split("\n")) {
+        if (line.startsWith("event: ")) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          eventData = line.slice(6);
+        }
+      }
+
+      if (eventData) {
+        try {
+          onEvent({
+            event: eventType as ChainStreamEvent["event"],
+            data: JSON.parse(eventData),
+          });
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
 }
 
 // ============= Generations (History) =============
@@ -466,6 +569,31 @@ export async function exportTxt(data: {
     throw new Error(error.detail);
   }
   
+  return response.blob();
+}
+
+export async function exportPdf(data: {
+  title: string;
+  results: Array<{
+    prompt_name: string;
+    content: string;
+  }>;
+  generation_id?: string;
+  dataset_id?: string;
+}): Promise<Blob> {
+  const headers = await getAuthHeaders();
+
+  const response = await fetch(`${API_BASE_URL}/api/exports/pdf`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Export failed" }));
+    throw new Error(error.detail);
+  }
+
   return response.blob();
 }
 

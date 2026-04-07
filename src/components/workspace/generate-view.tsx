@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,7 @@ import {
   GitBranch,
   History,
   Eye,
+  Code,
   ChevronRight,
   File,
 } from "lucide-react";
@@ -30,7 +31,7 @@ import * as api from "@/lib/api";
 import { useWorkspace } from "@/lib/workspace-context";
 
 const AVAILABLE_MODELS: ModelOption[] = [
-  { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash" },
+  { id: "google/gemini-3.1-flash-image-preview", label: "Gemini 3.1 Flash" },
   { id: "google/gemini-2.5-pro-preview-03-25", label: "Gemini 2.5 Pro" },
   { id: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
   { id: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
@@ -80,15 +81,26 @@ export function GenerateView() {
 
   // Step 3: Generate
   const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS[0].id);
+  const [grade, setGrade] = useState("");
+  const [subject, setSubject] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [generatedContent, setGeneratedContent] = useState("");
   const [currentGenerationId, setCurrentGenerationId] = useState<string | null>(null);
 
+  // Chain progress
+  const [chainProgress, setChainProgress] = useState<{
+    currentStep: number;
+    totalSteps: number;
+    stepName: string;
+    completedSteps: { name: string; content: string }[];
+  } | null>(null);
+
   // UI
   const [showHistory, setShowHistory] = useState(false);
-  const [exportDialog, setExportDialog] = useState<{ format: "docx" | "txt" } | null>(null);
+  const [exportDialog, setExportDialog] = useState<{ format: "docx" | "txt" | "pdf" } | null>(null);
   const [exportFilename, setExportFilename] = useState("");
+  const [viewMode, setViewMode] = useState<"preview" | "raw">("preview");
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
   const selectedPrompt = allPrompts.find((p) => p.id === selectedPromptId);
@@ -113,10 +125,89 @@ export function GenerateView() {
     setIsRunning(true);
     setGeneratedContent("");
     setCurrentGenerationId(null);
+    setChainProgress(null);
 
     try {
       const prompt = allPrompts.find((p) => p.id === selectedPromptId);
-      if (!prompt && promptMode !== "chain") {
+
+      // Chain mode: use SSE streaming
+      if (promptMode === "chain" && selectedChainId) {
+        setChainProgress({ currentStep: 0, totalSteps: 0, stepName: "Starting...", completedSteps: [] });
+
+        await api.generateChainStream(
+          {
+            source_ids: selectedSourceIds,
+            prompt_text: "",
+            model: selectedModel,
+            title: sessionTitle,
+            chain_id: selectedChainId,
+            grade: grade || undefined,
+            subject: subject || undefined,
+          },
+          (event) => {
+            switch (event.event) {
+              case "planning":
+                setChainProgress((prev) => ({
+                  currentStep: 0,
+                  totalSteps: prev?.totalSteps || 0,
+                  stepName: event.data.message || "Analyzing chapter & planning workbook...",
+                  completedSteps: prev?.completedSteps || [],
+                }));
+                break;
+              case "step_start":
+                setChainProgress((prev) => ({
+                  currentStep: event.data.step || 0,
+                  totalSteps: event.data.total_steps || 0,
+                  stepName: event.data.step_name || "",
+                  completedSteps: prev?.completedSteps || [],
+                }));
+                break;
+              case "step_complete":
+                setChainProgress((prev) => ({
+                  currentStep: event.data.step || 0,
+                  totalSteps: event.data.total_steps || 0,
+                  stepName: event.data.step_name || "",
+                  completedSteps: [
+                    ...(prev?.completedSteps || []),
+                    { name: event.data.step_name || "", content: event.data.content || "" },
+                  ],
+                }));
+                break;
+              case "done":
+                setGeneratedContent(event.data.content || "");
+                setCurrentGenerationId(event.data.generation_id || null);
+                setChainProgress(null);
+                toast.success("Content generated!");
+                if (event.data.generation_id) {
+                  addGeneration({
+                    id: event.data.generation_id,
+                    user_id: "",
+                    title: sessionTitle,
+                    prompt_text: "",
+                    response_format_text: null,
+                    model_used: selectedModel,
+                    status: "completed",
+                    error_message: null,
+                    prompt_chain_id: selectedChainId ?? null,
+                    response_content: event.data.content || "",
+                    created_at: new Date().toISOString(),
+                  });
+                }
+                break;
+              case "error":
+                toast.error(event.data.message || "Chain generation failed");
+                setChainProgress(null);
+                break;
+            }
+          },
+        );
+
+        setIsRunning(false);
+        return;
+      }
+
+      // Single prompt mode
+      if (!prompt) {
         toast.error("Please select a prompt template");
         setIsRunning(false);
         return;
@@ -124,18 +215,10 @@ export function GenerateView() {
 
       const data = await api.generate({
         source_ids: selectedSourceIds,
-        prompt_text: prompt?.text || "",
-        format_text: prompt?.response_format?.template_text,
+        prompt_text: prompt.text || "",
+        format_text: prompt.response_format?.template_text,
         model: selectedModel,
         title: sessionTitle,
-        chain_id: promptMode === "chain" ? selectedChainId : undefined,
-      });
-
-      console.log("[generate-view] API response:", {
-        hasContent: !!data.content,
-        contentLength: data.content?.length,
-        contentPreview: data.content?.substring(0, 200),
-        generationId: data.generation_id,
       });
 
       setGeneratedContent(data.content);
@@ -153,7 +236,7 @@ export function GenerateView() {
           model_used: selectedModel,
           status: "completed",
           error_message: null,
-          prompt_chain_id: promptMode === "chain" ? (selectedChainId ?? null) : null,
+          prompt_chain_id: null,
           response_content: data.content,
           created_at: new Date().toISOString(),
         });
@@ -171,9 +254,10 @@ export function GenerateView() {
     selectedModel,
     sessionTitle,
     selectedChainId,
+    addGeneration,
   ]);
 
-  const openExportDialog = (format: "docx" | "txt") => {
+  const openExportDialog = (format: "docx" | "txt" | "pdf") => {
     if (!generatedContent) {
       toast.error("No content to export");
       return;
@@ -183,7 +267,7 @@ export function GenerateView() {
   };
 
   const handleExport = useCallback(
-    async (format: "docx" | "txt", filename: string) => {
+    async (format: "docx" | "txt" | "pdf", filename: string) => {
       if (!generatedContent) {
         toast.error("No content to export");
         return;
@@ -198,6 +282,13 @@ export function GenerateView() {
 
         if (format === "docx") {
           blob = await api.exportDocx({
+            title,
+            results: [{ prompt_name: prompt?.name || "Prompt", content: generatedContent }],
+            generation_id: currentGenerationId || undefined,
+            dataset_id: selectedDatasetId || undefined,
+          });
+        } else if (format === "pdf") {
+          blob = await api.exportPdf({
             title,
             results: [{ prompt_name: prompt?.name || "Prompt", content: generatedContent }],
             generation_id: currentGenerationId || undefined,
@@ -271,60 +362,339 @@ export function GenerateView() {
       (promptMode === "chain" && selectedChainId)) &&
     !isRunning;
 
-  // Render content with formatting
+  // Render content with full tag system preview
   const renderContent = (text: string) => {
-    const lines = text.split("\n");
-    return lines.map((line, i) => {
-      const trimmed = line.trim();
-      if (!trimmed) return <br key={i} />;
+    if (viewMode === "raw") {
+      return (
+        <pre className="whitespace-pre-wrap font-mono text-xs bg-muted/50 p-4 rounded-lg overflow-x-auto">
+          {text}
+        </pre>
+      );
+    }
 
+    // Normalize: join multi-line <indent>...</indent> and split lines with multiple block tags
+    const normalizeContent = (raw: string): string => {
+      // Join indent that spans two lines: <indent>content\n  </indent>
+      let out = raw.replace(/<indent>([^\n]*?)\s*\n\s*<\/indent>/g, "<indent>$1</indent>");
+      const blockTag =
+        /(?:<title>.*?<\/title>)|(?:<heading>.*?<\/heading>)|(?:<subheading>.*?<\/subheading>)|(?:<instruction>.*?<\/instruction>)|(?:<indent>.*?<\/indent>)|(?:<hr\s*\/>)|(?:<pagebreak\s*\/>)|(?:<blank\s*\/>)|(?:<space\s+lines="\d+"\s*\/>)/g;
+      const newLines: string[] = [];
+      for (const line of out.split("\n")) {
+        const parts = line.trim().split(new RegExp(`(${blockTag.source})`, "g"));
+        const segments = parts.filter((p) => p && p.trim());
+        if (segments.length > 1) {
+          newLines.push(...segments.map((s) => s.trim()));
+        } else {
+          newLines.push(line);
+        }
+      }
+      return newLines.join("\n");
+    };
+
+    const normalized = normalizeContent(text);
+    const lines = normalized.split("\n");
+    const elements: React.ReactNode[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const trimmed = lines[i].trim();
+
+      // Empty line or stray </indent>
+      if (!trimmed || trimmed === "</indent>") {
+        if (!trimmed) elements.push(<br key={i} />);
+        i++;
+        continue;
+      }
+
+      // <table>...</table> multi-line block
+      if (trimmed.startsWith("<table")) {
+        const blockLines: string[] = [];
+        while (i < lines.length && !lines[i].includes("</table>")) {
+          blockLines.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) {
+          blockLines.push(lines[i]);
+          i++;
+        }
+        const block = blockLines.join("\n");
+        const rows: string[][] = [];
+        const rowRegex = /<row>([\s\S]*?)<\/row>/g;
+        let rowMatch;
+        while ((rowMatch = rowRegex.exec(block)) !== null) {
+          const cells = [...rowMatch[1].matchAll(/<cell>([\s\S]*?)<\/cell>/g)].map((m) => m[1].trim());
+          if (cells.length) rows.push(cells);
+        }
+        if (rows.length) {
+          elements.push(
+            <table key={`tbl-${i}`} className="w-full border-collapse border border-border my-3 text-sm">
+              <tbody>
+                {rows.map((row, ri) => (
+                  <tr key={ri} className={ri === 0 ? "bg-muted font-semibold" : ""}>
+                    {row.map((cell, ci) => (
+                      <td key={ci} className="border border-border px-3 py-1.5">
+                        {renderInline(cell)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+        }
+        continue;
+      }
+
+      // <box>...</box> multi-line block
+      if (trimmed.startsWith("<box")) {
+        const blockLines: string[] = [];
+        while (i < lines.length && !lines[i].includes("</box>")) {
+          blockLines.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length) {
+          blockLines.push(lines[i]);
+          i++;
+        }
+        const block = blockLines.join("\n");
+        const titleMatch = block.match(/<box\s+title="([^"]*)"/);
+        const innerMatch = block.match(/<box[^>]*>([\s\S]*?)<\/box>/);
+        const boxContent = innerMatch ? innerMatch[1].trim() : "";
+        elements.push(
+          <div key={`box-${i}`} className="border rounded-lg p-4 my-3 bg-muted/30">
+            {titleMatch && (
+              <div className="font-semibold text-sm mb-2">{titleMatch[1]}</div>
+            )}
+            {boxContent.split("\n").map((bl, bi) => {
+              const blt = bl.trim();
+              if (!blt) return <br key={bi} />;
+              const hm = blt.match(/^<heading>(.*?)<\/heading>$/);
+              if (hm) return <h2 key={bi} className="text-lg font-bold mt-3 mb-1">{renderInline(hm[1])}</h2>;
+              const shm = blt.match(/^<subheading>(.*?)<\/subheading>$/);
+              if (shm) return <h3 key={bi} className="text-base font-semibold mt-2 mb-1">{renderInline(shm[1])}</h3>;
+              const im = blt.match(/^<instruction>(.*?)<\/instruction>$/);
+              if (im) return <p key={bi} className="italic text-muted-foreground my-1 text-sm">{renderInline(im[1])}</p>;
+              if (blt === "<hr/>" || blt === "<hr />") return <hr key={bi} className="my-2 border-border" />;
+              return <p key={bi} className="my-0.5 text-sm">{renderInline(blt)}</p>;
+            })}
+          </div>
+        );
+        continue;
+      }
+
+      // <title>
+      const titleMatch = trimmed.match(/^<title>(.*?)<\/title>$/);
+      if (titleMatch) {
+        elements.push(
+          <h1 key={i} className="text-xl font-bold text-center mt-5 mb-3">
+            {titleMatch[1]}
+          </h1>
+        );
+        i++;
+        continue;
+      }
+
+      // <heading>
       const headingMatch = trimmed.match(/^<heading>(.*?)<\/heading>$/);
-      if (headingMatch)
-        return (
+      if (headingMatch) {
+        elements.push(
           <h2 key={i} className="text-lg font-bold mt-4 mb-2">
             {headingMatch[1]}
           </h2>
         );
+        i++;
+        continue;
+      }
 
+      // <subheading>
       const subMatch = trimmed.match(/^<subheading>(.*?)<\/subheading>$/);
-      if (subMatch)
-        return (
+      if (subMatch) {
+        elements.push(
           <h3 key={i} className="text-base font-semibold mt-3 mb-1">
             {subMatch[1]}
           </h3>
         );
+        i++;
+        continue;
+      }
 
+      // <instruction>
+      const instrMatch = trimmed.match(/^<instruction>(.*?)<\/instruction>$/);
+      if (instrMatch) {
+        elements.push(
+          <p key={i} className="italic text-muted-foreground my-2">
+            {instrMatch[1]}
+          </p>
+        );
+        i++;
+        continue;
+      }
+
+      // <hr/>
+      if (trimmed === "<hr/>" || trimmed === "<hr />") {
+        elements.push(<hr key={i} className="my-4 border-border" />);
+        i++;
+        continue;
+      }
+
+      // <pagebreak/>
+      if (trimmed === "<pagebreak/>" || trimmed === "<pagebreak />") {
+        elements.push(
+          <div key={i} className="my-4 border-t-2 border-dashed border-muted-foreground/30 text-center">
+            <span className="text-[10px] text-muted-foreground bg-card px-2 relative -top-2.5">page break</span>
+          </div>
+        );
+        i++;
+        continue;
+      }
+
+      // <space lines="N"/>
+      const spaceMatch = trimmed.match(/^<space\s+lines="(\d+)"\s*\/>$/);
+      if (spaceMatch) {
+        const n = parseInt(spaceMatch[1]);
+        elements.push(
+          <div key={i} style={{ height: `${n * 1.5}em` }} className="bg-muted/20 rounded my-1" />
+        );
+        i++;
+        continue;
+      }
+
+      // <blank/> or ___
+      if (trimmed === "<blank/>" || trimmed === "<blank />" || /^_{3,}$/.test(trimmed)) {
+        elements.push(
+          <p key={i} className="my-1 tracking-widest text-muted-foreground">
+            {"_".repeat(40)}
+          </p>
+        );
+        i++;
+        continue;
+      }
+
+      // <indent>...</indent> (supports nesting, including partial/unclosed)
+      if (trimmed.startsWith("<indent>")) {
+        let inner = trimmed;
+        let level = 0;
+        // Count and strip opening <indent> tags
+        while (inner.startsWith("<indent>")) {
+          inner = inner.slice("<indent>".length);
+          level++;
+        }
+        // Strip closing </indent> tags
+        while (inner.endsWith("</indent>")) {
+          inner = inner.slice(0, -"</indent>".length);
+        }
+        inner = inner.trim();
+        const bulletInner = inner.match(/^[-•*]\s+(.+)/);
+        const numInner = inner.match(/^(\d+)[.)]\s+(.+)/);
+        if (bulletInner) {
+          elements.push(
+            <li key={i} className="list-disc" style={{ marginLeft: `${level * 1.5}rem` }}>
+              {renderInline(bulletInner[1])}
+            </li>
+          );
+        } else if (numInner) {
+          elements.push(
+            <li key={i} className="list-decimal" style={{ marginLeft: `${level * 1.5}rem` }} value={parseInt(numInner[1])}>
+              {renderInline(numInner[2])}
+            </li>
+          );
+        } else if (inner) {
+          elements.push(
+            <p key={i} className="my-0.5" style={{ marginLeft: `${level * 1.5}rem` }}>
+              {renderInline(inner)}
+            </p>
+          );
+        }
+        i++;
+        continue;
+      }
+
+      // Bullet list
       const bulletMatch = trimmed.match(/^[-•*]\s+(.+)/);
-      if (bulletMatch)
-        return (
+      if (bulletMatch) {
+        elements.push(
           <li key={i} className="ml-4 list-disc">
             {renderInline(bulletMatch[1])}
           </li>
         );
+        i++;
+        continue;
+      }
 
+      // Hierarchical numbered list: 1.1 Item, 1.1.1 Item, etc.
+      const hierMatch = trimmed.match(/^(\d+(?:\.\d+)+)\s+(.+)/);
+      if (hierMatch) {
+        const depth = (hierMatch[1].match(/\./g) || []).length;
+        elements.push(
+          <p key={i} className="my-0.5" style={{ marginLeft: `${depth * 1.25}rem` }}>
+            <strong className="mr-1">{hierMatch[1]}</strong>
+            {renderInline(hierMatch[2])}
+          </p>
+        );
+        i++;
+        continue;
+      }
+
+      // Numbered list
       const numMatch = trimmed.match(/^(\d+)[.)]\s+(.+)/);
-      if (numMatch)
-        return (
+      if (numMatch) {
+        elements.push(
           <li key={i} className="ml-4 list-decimal" value={parseInt(numMatch[1])}>
             {renderInline(numMatch[2])}
           </li>
         );
+        i++;
+        continue;
+      }
 
-      return (
+      // Markdown headings fallback
+      const mdMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+      if (mdMatch) {
+        const lvl = mdMatch[1].length;
+        const cls = lvl === 1 ? "text-lg font-bold mt-4 mb-2" : lvl === 2 ? "text-base font-semibold mt-3 mb-1" : "text-sm font-semibold mt-2 mb-1";
+        const Tag = lvl === 1 ? "h2" : lvl === 2 ? "h3" : "h4";
+        elements.push(<Tag key={i} className={cls}>{mdMatch[2]}</Tag>);
+        i++;
+        continue;
+      }
+
+      // Regular text
+      elements.push(
         <p key={i} className="my-1">
           {renderInline(trimmed)}
         </p>
       );
-    });
+      i++;
+    }
+
+    return elements;
   };
 
-  const renderInline = (text: string) => {
-    const parts = text.split(/(<bold>[\s\S]*?<\/bold>|\*\*[\s\S]*?\*\*)/g);
+  const renderInline = (text: string): React.ReactNode => {
+    const pattern =
+      /(<bold>[\s\S]*?<\/bold>|<italic>[\s\S]*?<\/italic>|<underline>[\s\S]*?<\/underline>|<label>[\s\S]*?<\/label>|<blank\s*\/>|\*\*[\s\S]*?\*\*|_{3,})/g;
+    const parts = text.split(pattern);
     return parts.map((part, i) => {
+      if (!part) return null;
+
       const boldXml = part.match(/^<bold>([\s\S]*?)<\/bold>$/);
       if (boldXml) return <strong key={i}>{boldXml[1]}</strong>;
+
+      const italicXml = part.match(/^<italic>([\s\S]*?)<\/italic>$/);
+      if (italicXml) return <em key={i}>{italicXml[1]}</em>;
+
+      const ulXml = part.match(/^<underline>([\s\S]*?)<\/underline>$/);
+      if (ulXml) return <u key={i}>{ulXml[1]}</u>;
+
+      const labelXml = part.match(/^<label>([\s\S]*?)<\/label>$/);
+      if (labelXml) return <strong key={i} className="mr-1">{labelXml[1]}</strong>;
+
+      if (part.trim() === "<blank/>" || part.trim() === "<blank />" || /^_{3,}$/.test(part.trim()))
+        return <span key={i} className="tracking-widest text-muted-foreground">{"_".repeat(30)}</span>;
+
       const boldMd = part.match(/^\*\*([\s\S]*?)\*\*$/);
       if (boldMd) return <strong key={i}>{boldMd[1]}</strong>;
+
       return <span key={i}>{part}</span>;
     });
   };
@@ -354,6 +724,32 @@ export function GenerateView() {
                   ))}
                 </select>
                 <ChevronDown className="h-3 w-3 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground" />
+              </div>
+            </div>
+
+            {/* Grade & Subject (optional hints for master planner) */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Grade / Class</label>
+                <input
+                  type="text"
+                  value={grade}
+                  onChange={(e) => setGrade(e.target.value)}
+                  disabled={isRunning}
+                  placeholder="e.g. Class 4"
+                  className="w-full h-8 px-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Subject</label>
+                <input
+                  type="text"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  disabled={isRunning}
+                  placeholder="e.g. Science"
+                  className="w-full h-8 px-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                />
               </div>
             </div>
           </div>
@@ -693,7 +1089,74 @@ export function GenerateView() {
 
       {/* Right: Results */}
       <div className="flex-1 overflow-y-auto">
-        {generatedContent ? (
+        {/* Chain progress overlay */}
+        {isRunning && chainProgress ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="max-w-lg w-full mx-auto p-8 space-y-6">
+              {/* Header */}
+              <div className="text-center space-y-1">
+                <h2 className="text-lg font-semibold">{sessionTitle}</h2>
+                <p className="text-sm text-muted-foreground">
+                  Running prompt chain&hellip;
+                </p>
+              </div>
+
+              {/* Overall progress bar */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">Overall Progress</span>
+                  <span className="text-muted-foreground">
+                    {chainProgress.completedSteps.length} / {chainProgress.totalSteps} steps
+                  </span>
+                </div>
+                <div className="h-2.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+                    style={{
+                      width: `${chainProgress.totalSteps > 0 ? Math.round((chainProgress.completedSteps.length / chainProgress.totalSteps) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Current step */}
+              {chainProgress.currentStep > chainProgress.completedSteps.length && (
+                <div className="space-y-2 bg-muted/30 rounded-lg p-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                      Step {chainProgress.currentStep}: {chainProgress.stepName}
+                    </span>
+                    <span className="text-muted-foreground text-xs">
+                      Processing...
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Completed steps list */}
+              {chainProgress.completedSteps.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="font-medium text-sm">Completed Steps</h3>
+                  <div className="border rounded-lg divide-y">
+                    {chainProgress.completedSteps.map((step, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-3 px-4 py-2.5 text-sm"
+                      >
+                        <div className="h-5 w-5 rounded-full bg-green-500/20 text-green-600 dark:text-green-400 flex items-center justify-center shrink-0">
+                          <Check className="h-3 w-3" />
+                        </div>
+                        <span className="font-medium">Step {i + 1}</span>
+                        <span className="text-muted-foreground truncate">{step.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : generatedContent ? (
           <div className="p-6 max-w-4xl">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -705,10 +1168,36 @@ export function GenerateView() {
                 </p>
               </div>
               <div className="flex gap-2">
+                <div className="flex border rounded-lg overflow-hidden mr-1">
+                  <button
+                    onClick={() => setViewMode("preview")}
+                    className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${
+                      viewMode === "preview"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                    }`}
+                    title="Formatted preview"
+                  >
+                    <Eye className="h-3 w-3" />
+                    Preview
+                  </button>
+                  <button
+                    onClick={() => setViewMode("raw")}
+                    className={`flex items-center gap-1 text-xs px-2.5 py-1.5 transition-colors ${
+                      viewMode === "raw"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                    }`}
+                    title="Raw XML tags"
+                  >
+                    <Code className="h-3 w-3" />
+                    Raw
+                  </button>
+                </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => openExportDialog("docx")}
+                  onClick={() => openExportDialog("pdf")}
                   disabled={isExporting}
                 >
                   {isExporting ? (
@@ -716,6 +1205,15 @@ export function GenerateView() {
                   ) : (
                     <FileDown className="h-3 w-3 mr-1" />
                   )}
+                  .pdf
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openExportDialog("docx")}
+                  disabled={isExporting}
+                >
+                  <FileDown className="h-3 w-3 mr-1" />
                   .docx
                 </Button>
                 <Button

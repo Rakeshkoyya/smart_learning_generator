@@ -43,6 +43,7 @@ export function PromptsView() {
     updatePrompt,
     deletePrompt,
     createChain,
+    updateChain,
     deleteChain,
     fetchPrompts,
     fetchChains,
@@ -224,10 +225,13 @@ export function PromptsView() {
   const handleUpdateChain = async () => {
     if (!selectedChain || !editChainName.trim() || editChainSteps.length === 0) return;
     try {
-      // Note: Update not fully implemented in context yet
-      toast.success("Chain updated");
+      const updated = await updateChain(selectedChain.id, {
+        name: editChainName,
+        steps: editChainSteps,
+      });
+      setSelectedChain(updated);
       setEditChainMode(false);
-      fetchChains(true);
+      toast.success("Chain updated");
     } catch {
       toast.error("Failed to update chain");
     }
@@ -662,12 +666,21 @@ export function PromptsView() {
                       key={chain.id}
                       className="group"
                     >
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => {
                           selectChain(chain);
                           setShowNewChain(false);
                         }}
-                        className={`w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            selectChain(chain);
+                            setShowNewChain(false);
+                          }
+                        }}
+                        className={`w-full text-left flex items-center gap-2 px-4 py-2.5 text-sm transition-colors cursor-pointer ${
                           selectedChain?.id === chain.id
                             ? "bg-primary/10 text-primary"
                             : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
@@ -691,7 +704,7 @@ export function PromptsView() {
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>
-                      </button>
+                      </div>
                     </div>
                   ))
                 )}
