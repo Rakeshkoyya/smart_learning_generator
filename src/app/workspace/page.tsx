@@ -9,6 +9,7 @@ import { ExportsView } from "@/components/workspace/exports-view";
 import { GenieView } from "@/components/workspace/genie/genie-view";
 import { WorkflowView } from "@/components/workspace/workflow-view";
 import { DocForgeView } from "@/components/workspace/docforge/docforge-view";
+import { WikiView } from "@/components/workspace/wiki/wiki-view";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 
 function WorkspaceContent() {
@@ -21,13 +22,14 @@ function WorkspaceContent() {
   }, [fetchAll]);
 
   const isGenie = activeSection === "genie";
+  const isWiki = activeSection === "wiki";
 
   return (
     <div className="h-screen flex bg-background overflow-hidden">
       <Sidebar
         active={activeSection}
         onNavigate={setActiveSection}
-        forceCollapsed={isGenie}
+        forceCollapsed={isGenie || isWiki}
       />
       <main className="flex-1 overflow-hidden">
         {activeSection === "generate" && <GenerateView />}
@@ -37,6 +39,7 @@ function WorkspaceContent() {
         {activeSection === "docforge" && <DocForgeView />}
         {activeSection === "exports" && <ExportsView />}
         {activeSection === "genie" && <GenieView />}
+        {activeSection === "wiki" && <WikiView />}
       </main>
     </div>
   );

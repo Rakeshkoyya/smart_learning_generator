@@ -998,3 +998,207 @@ export async function downloadDocForgeDocument(id: string): Promise<Blob> {
 export async function deleteDocForgeDocument(id: string): Promise<void> {
   await apiRequest(`/api/docforge/documents/${id}`, { method: "DELETE" });
 }
+
+// ============= Wiki =============
+
+import type {
+  Wiki, WikiPage, WikiGraph, WikiLog,
+  WikiTransformation, WikiLintReport, WikiPageType,
+} from "./types";
+
+export async function getWikis(): Promise<{ wikis: Wiki[]; total: number }> {
+  return apiRequest("/api/wikis");
+}
+
+export async function getWiki(id: string): Promise<Wiki> {
+  return apiRequest(`/api/wikis/${id}`);
+}
+
+export async function createWiki(data: {
+  dataset_id: string;
+  name: string;
+  description?: string;
+}): Promise<Wiki> {
+  return apiRequest("/api/wikis", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateWiki(
+  id: string,
+  data: { name?: string; description?: string }
+): Promise<Wiki> {
+  return apiRequest(`/api/wikis/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteWiki(id: string): Promise<void> {
+  await apiRequest(`/api/wikis/${id}`, { method: "DELETE" });
+}
+
+// ============= Wiki Pages =============
+
+export async function getWikiPages(
+  wikiId: string,
+  opts?: { page_type?: string; q?: string; limit?: number; offset?: number }
+): Promise<{ pages: WikiPage[]; total: number }> {
+  const params = new URLSearchParams();
+  if (opts?.page_type) params.set("page_type", opts.page_type);
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return apiRequest(`/api/wikis/${wikiId}/pages${qs ? `?${qs}` : ""}`);
+}
+
+export async function getWikiPage(wikiId: string, pageId: string): Promise<WikiPage> {
+  return apiRequest(`/api/wikis/${wikiId}/pages/${pageId}`);
+}
+
+export async function updateWikiPage(
+  wikiId: string,
+  pageId: string,
+  data: { title?: string; content?: string; frontmatter?: Record<string, unknown> }
+): Promise<WikiPage> {
+  return apiRequest(`/api/wikis/${wikiId}/pages/${pageId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteWikiPage(wikiId: string, pageId: string): Promise<void> {
+  await apiRequest(`/api/wikis/${wikiId}/pages/${pageId}`, { method: "DELETE" });
+}
+
+export async function getWikiGraph(wikiId: string): Promise<WikiGraph> {
+  return apiRequest(`/api/wikis/${wikiId}/graph`);
+}
+
+// ============= Wiki Agent Operations =============
+
+export async function ingestToWiki(
+  wikiId: string,
+  sourceId: string,
+  model?: string,
+  onEvent?: (data: Record<string, unknown>) => void
+): Promise<void> {
+  const headers = await getAuthHeaders();
+
+  const response = await fetch(`${API_BASE_URL}/api/wikis/${wikiId}/ingest`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ source_id: sourceId, model }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Ingest failed" }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          onEvent?.(data);
+        } catch {
+          // Ignore malformed SSE lines
+        }
+      }
+    }
+  }
+}
+
+export async function queryWiki(
+  wikiId: string,
+  question: string,
+  opts?: { model?: string; file_as_page?: boolean }
+): Promise<{ answer: string; cited_pages: WikiPage[]; filed_page: WikiPage | null }> {
+  return apiRequest(`/api/wikis/${wikiId}/query`, {
+    method: "POST",
+    body: JSON.stringify({
+      question,
+      model: opts?.model,
+      file_as_page: opts?.file_as_page ?? false,
+    }),
+  });
+}
+
+export async function lintWiki(wikiId: string): Promise<WikiLintReport> {
+  return apiRequest(`/api/wikis/${wikiId}/lint`, { method: "POST" });
+}
+
+export async function transformWiki(
+  wikiId: string,
+  data: {
+    transformation_type: string;
+    title?: string;
+    scope?: Record<string, unknown>;
+    config?: Record<string, unknown>;
+    model?: string;
+  }
+): Promise<WikiTransformation> {
+  return apiRequest(`/api/wikis/${wikiId}/transform`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+// ============= Wiki Transformations =============
+
+export async function getWikiTransformations(
+  wikiId: string,
+  opts?: { transformation_type?: string; limit?: number; offset?: number }
+): Promise<{ transformations: WikiTransformation[]; total: number }> {
+  const params = new URLSearchParams();
+  if (opts?.transformation_type) params.set("transformation_type", opts.transformation_type);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return apiRequest(`/api/wikis/${wikiId}/transformations${qs ? `?${qs}` : ""}`);
+}
+
+export async function getWikiTransformation(
+  wikiId: string,
+  transformationId: string
+): Promise<WikiTransformation> {
+  return apiRequest(`/api/wikis/${wikiId}/transformations/${transformationId}`);
+}
+
+export async function deleteWikiTransformation(
+  wikiId: string,
+  transformationId: string
+): Promise<void> {
+  await apiRequest(`/api/wikis/${wikiId}/transformations/${transformationId}`, {
+    method: "DELETE",
+  });
+}
+
+// ============= Wiki Logs =============
+
+export async function getWikiLogs(
+  wikiId: string,
+  opts?: { limit?: number; offset?: number }
+): Promise<{ logs: WikiLog[]; total: number }> {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return apiRequest(`/api/wikis/${wikiId}/logs${qs ? `?${qs}` : ""}`);
+}

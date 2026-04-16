@@ -179,3 +179,133 @@ export interface DocForgeDocument {
   file_size: number | null;
   created_at: string;
 }
+
+// ── Wiki types ──
+
+export type WikiPageType =
+  | "entity"
+  | "concept"
+  | "source_summary"
+  | "topic_summary"
+  | "comparison"
+  | "analysis"
+  | "index"
+  | "overview";
+
+export type WikiTransformationType =
+  | "concept_map"
+  | "qa_exercises"
+  | "story"
+  | "podcast_transcript"
+  | "video_script"
+  | "flashcards"
+  | "quiz"
+  | "slide_deck"
+  | "mind_map"
+  | "character_story"
+  | "advanced_summary"
+  | "comparison_table";
+
+export interface Wiki {
+  id: string;
+  user_id: string;
+  dataset_id: string;
+  name: string;
+  description: string | null;
+  schema_config: Record<string, unknown>;
+  stats: {
+    page_count?: number;
+    source_count?: number;
+    link_count?: number;
+    last_ingested_at?: string;
+    last_linted_at?: string;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WikiPageLink {
+  id: string;
+  source_page_id: string;
+  target_page_id: string;
+  link_text: string;
+}
+
+export interface WikiPage {
+  id: string;
+  wiki_id: string;
+  title: string;
+  slug: string;
+  page_type: WikiPageType;
+  content: string;
+  frontmatter: {
+    tags?: string[];
+    source_refs?: string[];
+    related_pages?: string[];
+    confidence?: number;
+    question?: string;
+  };
+  outbound_links?: WikiPageLink[];
+  inbound_links?: WikiPageLink[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WikiGraphNode {
+  id: string;
+  title: string;
+  slug: string;
+  page_type: WikiPageType;
+  link_count: number;
+}
+
+export interface WikiGraphEdge {
+  source: string;
+  target: string;
+  link_text: string | null;
+}
+
+export interface WikiGraph {
+  nodes: WikiGraphNode[];
+  edges: WikiGraphEdge[];
+}
+
+export interface WikiLog {
+  id: string;
+  wiki_id: string;
+  operation: string;
+  summary: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface WikiTransformation {
+  id: string;
+  wiki_id: string;
+  title: string;
+  transformation_type: WikiTransformationType;
+  scope: Record<string, unknown>;
+  content: string;
+  config: Record<string, unknown>;
+  status: "pending" | "processing" | "completed" | "error";
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WikiLintIssue {
+  type: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+  page_id: string | null;
+  page_title: string | null;
+  suggestion: string | null;
+}
+
+export interface WikiLintReport {
+  issues: WikiLintIssue[];
+  summary: string;
+  page_count: number;
+  link_count: number;
+  orphan_count: number;
+}
