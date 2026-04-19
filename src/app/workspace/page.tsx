@@ -9,6 +9,7 @@ import { ExportsView } from "@/components/workspace/exports-view";
 import { GenieView } from "@/components/workspace/genie/genie-view";
 import { WorkflowView } from "@/components/workspace/workflow-view";
 import { DocForgeView } from "@/components/workspace/docforge/docforge-view";
+import { DocAgentView } from "@/components/workspace/docagent/docagent-view";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace-context";
 
 function WorkspaceContent() {
@@ -35,6 +36,7 @@ function WorkspaceContent() {
         {activeSection === "prompts" && <PromptsView />}
         {activeSection === "workflows" && <WorkflowView />}
         {activeSection === "docforge" && <DocForgeView />}
+        {activeSection === "docagent" && <DocAgentView />}
         {activeSection === "exports" && <ExportsView />}
         {activeSection === "genie" && <GenieView />}
       </main>

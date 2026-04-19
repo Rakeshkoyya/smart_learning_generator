@@ -738,6 +738,153 @@ export function generateInfographic(
   return () => controller.abort();
 }
 
+// ============= DocAgent =============
+
+export interface DocAgentJob {
+  id: string;
+  user_id: string;
+  title: string | null;
+  user_prompt: string;
+  model_used: string;
+  source_filename: string | null;
+  status: string;
+  error_message: string | null;
+  output_filename: string | null;
+  file_size: number | null;
+  analysis_result: Record<string, unknown> | null;
+  plan_result: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface DocAgentJobListResponse {
+  jobs: DocAgentJob[];
+  total: number;
+}
+
+export function docagentGenerate(
+  data: {
+    file: File;
+    userPrompt: string;
+    model: string;
+    title?: string;
+    subject?: string;
+    classLevel?: string;
+    chapterNumber?: number;
+    colorPalette?: string;
+  },
+  onStatus: (step: string, message: string) => void,
+  onAnalysis: (analysis: Record<string, unknown>) => void,
+  onPlan: (plan: Record<string, unknown>) => void,
+  onDone: (jobId: string, filename: string) => void,
+  onError: (error: string) => void
+): () => void {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const headers = await getAuthHeaders();
+      delete headers["Content-Type"]; // Let browser set for FormData
+
+      const formData = new FormData();
+      formData.append("file", data.file);
+      formData.append("user_prompt", data.userPrompt);
+      formData.append("model", data.model);
+      if (data.title) formData.append("title", data.title);
+      if (data.subject) formData.append("subject", data.subject);
+      if (data.classLevel) formData.append("class_level", data.classLevel);
+      if (data.chapterNumber) formData.append("chapter_number", String(data.chapterNumber));
+      if (data.colorPalette) formData.append("color_palette", data.colorPalette);
+
+      const response = await fetch(`${API_BASE_URL}/api/docagent/generate`, {
+        method: "POST",
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: "Failed" }));
+        onError(error.detail || `HTTP ${response.status}`);
+        return;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        onError("No response body");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        let currentEvent = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            try {
+              const payload = JSON.parse(line.slice(6));
+
+              switch (currentEvent) {
+                case "status":
+                  onStatus(payload.step, payload.message);
+                  break;
+                case "analysis":
+                  onAnalysis(payload);
+                  break;
+                case "plan":
+                  onPlan(payload);
+                  break;
+                case "done":
+                  onDone(payload.job_id, payload.filename);
+                  break;
+                case "error":
+                  onError(payload.message);
+                  break;
+              }
+            } catch {
+              // skip malformed
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name !== "AbortError") {
+        onError(err.message);
+      }
+    }
+  })();
+
+  return () => controller.abort();
+}
+
+export async function docagentListJobs(): Promise<DocAgentJobListResponse> {
+  return apiRequest<DocAgentJobListResponse>("/api/docagent/jobs");
+}
+
+export async function docagentDownload(jobId: string): Promise<Blob> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/api/docagent/jobs/${jobId}/download`, {
+    headers,
+  });
+  if (!response.ok) {
+    throw new Error("Download failed");
+  }
+  return response.blob();
+}
+
+export async function docagentDeleteJob(jobId: string): Promise<void> {
+  await apiRequest(`/api/docagent/jobs/${jobId}`, { method: "DELETE" });
+}
+
 // ============= Workflows =============
 
 export interface WorkflowRun {

@@ -14,10 +14,11 @@ import {
   Wand2,
   Workflow,
   FileSignature,
+  BrainCircuit,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
-export type SidebarSection = "generate" | "prompts" | "sources" | "exports" | "genie" | "workflows" | "docforge";
+export type SidebarSection = "generate" | "prompts" | "sources" | "exports" | "genie" | "workflows" | "docforge" | "docagent";
 
 interface SidebarProps {
   active: SidebarSection;
@@ -31,6 +32,7 @@ const NAV_ITEMS: { id: SidebarSection; label: string; icon: React.ElementType }[
   { id: "generate", label: "Generate", icon: Sparkles },
   { id: "workflows", label: "Workflows", icon: Workflow },
   { id: "docforge", label: "DocForge", icon: FileSignature },
+  { id: "docagent", label: "DocAgent", icon: BrainCircuit },
   { id: "genie", label: "Genie", icon: Wand2 },
   { id: "exports", label: "Exports", icon: Download },
 ];
